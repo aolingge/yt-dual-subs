@@ -7,12 +7,18 @@ const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 
 function element() {
-  return {
-    style: {}, textContent: '', isConnected: false, children: [],
+  let ownText = '';
+  const el = {
+    style: {}, isConnected: false, children: [],
     classList: { add() {}, remove() {}, toggle() {} },
     appendChild(child) { this.children.push(child); child.isConnected = true; },
     addEventListener() {}, setAttribute() {}, click() {}, remove() {}
   };
+  Object.defineProperty(el, 'textContent', {
+    get() { return ownText + this.children.map((child) => child.textContent).join(''); },
+    set(value) { ownText = String(value == null ? '' : value); this.children = []; }
+  });
+  return el;
 }
 
 async function mountCues(cues, aligned = true, tcues = null,

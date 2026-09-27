@@ -80,6 +80,7 @@
     repeatCount: 0,              // 0 = off, N = play each sentence N times, -1 = loop
     studyRate: 0.75,             // playback rate used while repeating a sentence
     karaoke: true,               // highlight the word being spoken (needs word times)
+    wordLookup: true,            // translate a word after a short mouse hover
     revealMode: "always",        // translation visibility: "always" | "hover" | "manual"
     autoCaptions: true,          // turn YouTube's own CC on for you when the page loads
     posMode: "preset",           // "preset" | "custom" (custom set by dragging)
@@ -228,6 +229,18 @@
   let wordSpans = null;         // karaoke spans of the original line, or null
   let wordTimes = null;         // parallel word start times (raw track ms)
   let activeWordIdx = -1;       // highlighted word index
+  let wordPopup = null;
+  let wordPopupWord = null;
+  let wordPopupMeaning = null;
+  let wordPopupMeta = null;
+  let wordPopupLink = null;
+  let wordLookupTimer = 0;
+  let wordLookupHideTimer = 0;
+  let wordLookupSeq = 0;
+  let wordLookupIntent = "";
+  const wordLookupCache = new Map();
+  const WORD_LOOKUP_DELAY_MS = 420;
+  const WORD_LOOKUP_CACHE_MAX = 300;
 
   // fallback (rendered-scrape) mode
   let pollTimer = null;
@@ -322,6 +335,7 @@
       revealShown = false;            // a new mode starts hidden again
       applyRevealState();
     }
+    if ("wordLookup" in changes || "targetLang" in changes) hideWordLookup();
     if ("karaoke" in changes || "revealMode" in changes) {
       activeCueIdx = -1;              // re-render the current sentence
       cueDirty = true;
@@ -442,6 +456,9 @@
         line.addEventListener(type, (event) => event.stopPropagation());
       }
     }
+    origEl.addEventListener("pointermove", onOriginalPointerMove);
+    origEl.addEventListener("pointerleave", scheduleWordLookupHide);
+    origEl.addEventListener("pointerdown", hideWordLookup);
 
     overlay.appendChild(transEl);
     overlay.appendChild(origEl);
@@ -611,6 +628,7 @@
     // per-line visibility
     origEl.style.display = settings.showOriginal ? "" : "none";
     transEl.style.display = settings.showTranslation ? "" : "none";
+    overlay.classList.toggle("ytds-word-lookup-on", !!settings.wordLookup);
 
     applyPosition();
     updateEmptyState();
@@ -618,6 +636,7 @@
   }
 
   function removeOverlay() {
+    destroyWordPopup();
     if (dragSaveTimer) { clearTimeout(dragSaveTimer); dragSaveTimer = null; }
     dragging = false;
     if (overlay) { overlay.remove(); overlay = null; } // removes handle + its listeners
@@ -689,6 +708,7 @@
     if (e.clientX < r.left || e.clientX > r.right ||
         e.clientY < r.top || e.clientY > r.bottom) {
       clearHoverReveal();
+      hideWordLookup();
       return;
     }
     overlay.classList.add("ytds-pointer-on");
@@ -700,7 +720,10 @@
   }
 
   function onWindowPointerOut(e) {
-    if (!e.relatedTarget && revealModeValue() === "hover") clearHoverReveal();
+    if (!e.relatedTarget) {
+      if (revealModeValue() === "hover") clearHoverReveal();
+      hideWordLookup();
+    }
   }
 
   function clearWordSpans() {
@@ -711,9 +734,186 @@
 
   function setOriginal(text) {
     if (!ensureOverlay()) return;
+    hideWordLookup();
     clearWordSpans();
-    origEl.textContent = stripSoundDescriptions(text);
+    origEl.textContent = "";
+    appendLookupSegments(origEl, stripSoundDescriptions(text));
     updateEmptyState();
+  }
+
+  // Keep the original text selectable while giving each word its own hover
+  // target. Separators are spans too, so lineText() still sees the full sentence.
+  function segmentCaptionWords(text) {
+    if (!text) return [];
+    try {
+      const locale = cueSourceLang === "auto" ? undefined : cueSourceLang;
+      return [...new Intl.Segmenter(locale, { granularity: "word" }).segment(text)]
+        .map((part) => ({ text: part.segment, word: !!part.isWordLike }));
+    } catch (_e) {
+      return [...text.matchAll(/[\p{L}\p{M}\p{N}]+|[^\p{L}\p{M}\p{N}]+/gu)]
+        .map((match) => ({ text: match[0], word: /^[\p{L}\p{M}\p{N}]/u.test(match[0]) }));
+    }
+  }
+
+  function appendLookupSegments(parent, text) {
+    for (const piece of segmentCaptionWords(text)) {
+      const span = document.createElement("span");
+      span.className = piece.word && piece.text.length <= 64
+        ? "ytds-lookup-word" : "ytds-lookup-sep";
+      span.textContent = piece.text;
+      parent.appendChild(span);
+    }
+  }
+
+  function hideWordLookup() {
+    if (wordLookupTimer) { clearTimeout(wordLookupTimer); wordLookupTimer = 0; }
+    if (wordLookupHideTimer) { clearTimeout(wordLookupHideTimer); wordLookupHideTimer = 0; }
+    wordLookupSeq++;
+    wordLookupIntent = "";
+    if (wordPopup) wordPopup.hidden = true;
+  }
+
+  function destroyWordPopup() {
+    hideWordLookup();
+    if (wordPopup) wordPopup.remove();
+    wordPopup = wordPopupWord = wordPopupMeaning = wordPopupMeta = wordPopupLink = null;
+  }
+
+  function scheduleWordLookupHide() {
+    if (wordLookupTimer) {
+      clearTimeout(wordLookupTimer);
+      wordLookupTimer = 0;
+      wordLookupSeq++;
+      wordLookupIntent = "";
+    }
+    if (!wordLookupHideTimer) {
+      wordLookupHideTimer = setTimeout(() => {
+        wordLookupHideTimer = 0;
+        hideWordLookup();
+      }, 180);
+    }
+  }
+
+  function ensureWordPopup() {
+    const player = getPlayer();
+    if (!player) return null;
+    if (wordPopup && wordPopup.isConnected && wordPopup.parentElement === player) return wordPopup;
+    if (wordPopup) wordPopup.remove();
+    wordPopup = document.createElement("div");
+    wordPopup.className = "ytds-word-popup notranslate";
+    wordPopup.setAttribute("translate", "no");
+    wordPopup.setAttribute("role", "group");
+    wordPopup.setAttribute("aria-label", t("wordLookupAria", "字幕单词查询"));
+    wordPopup.hidden = true;
+    wordPopupWord = document.createElement("strong");
+    wordPopupWord.className = "ytds-word-popup-word";
+    wordPopupMeaning = document.createElement("div");
+    wordPopupMeaning.className = "ytds-word-popup-meaning";
+    wordPopupMeta = document.createElement("small");
+    wordPopupMeta.className = "ytds-word-popup-meta";
+    wordPopupLink = document.createElement("a");
+    wordPopupLink.className = "ytds-word-popup-link";
+    wordPopupLink.textContent = t("wordLookupGodic", "德语助手详查 ↗");
+    wordPopupLink.target = "_blank";
+    wordPopupLink.rel = "noopener noreferrer";
+    wordPopup.appendChild(wordPopupWord);
+    wordPopup.appendChild(wordPopupMeaning);
+    wordPopup.appendChild(wordPopupMeta);
+    wordPopup.appendChild(wordPopupLink);
+    for (const type of ["pointerdown", "mousedown", "mouseup", "click", "dblclick"]) {
+      wordPopup.addEventListener(type, (event) => event.stopPropagation());
+    }
+    wordPopup.addEventListener("pointerenter", () => {
+      if (wordLookupHideTimer) { clearTimeout(wordLookupHideTimer); wordLookupHideTimer = 0; }
+    });
+    wordPopup.addEventListener("pointerleave", scheduleWordLookupHide);
+    player.appendChild(wordPopup);
+    return wordPopup;
+  }
+
+  function showWordPopup(word, meaning, sourceLang, targetLang, x, y) {
+    const popup = ensureWordPopup();
+    const player = getPlayer();
+    if (!popup || !player) return;
+    wordPopupWord.textContent = word;
+    wordPopupMeaning.textContent = meaning;
+    wordPopupMeta.textContent = (sourceLang === "auto" ? "?" : sourceLang) +
+      " → " + targetLang + " · " + t("wordLookupMachineHint", "Google 单词直译");
+    const german = /^de(?:-|$)/i.test(sourceLang);
+    wordPopupLink.hidden = !german;
+    if (german) {
+      wordPopupLink.href = "https://www.godic.net/dicts/de/" + encodeURIComponent(word);
+    }
+    popup.hidden = false;
+    const rect = player.getBoundingClientRect();
+    const width = popup.offsetWidth || 270;
+    const height = popup.offsetHeight || 105;
+    const left = Math.min(Math.max(x - rect.left + 12, 8),
+      Math.max(8, rect.width - width - 8));
+    const below = y - rect.top + 16;
+    const top = below + height > rect.height - 8
+      ? Math.max(8, y - rect.top - height - 14) : below;
+    popup.style.left = left + "px";
+    popup.style.top = top + "px";
+  }
+
+  function cacheWordLookup(key, translation) {
+    wordLookupCache.delete(key);
+    wordLookupCache.set(key, {
+      translation, expires: translation ? Infinity : Date.now() + 30000
+    });
+    if (wordLookupCache.size > WORD_LOOKUP_CACHE_MAX) {
+      wordLookupCache.delete(wordLookupCache.keys().next().value);
+    }
+  }
+
+  function lookupHoveredWord(seq, key, word, sourceLang, targetLang, x, y) {
+    wordLookupTimer = 0;
+    if (seq !== wordLookupSeq || key !== wordLookupIntent) return;
+    const cached = wordLookupCache.get(key);
+    if (cached && cached.expires > Date.now()) {
+      showWordPopup(word, cached.translation || t("wordLookupUnavailable", "暂时查不到译义"),
+        sourceLang, targetLang, x, y);
+      return;
+    }
+    showWordPopup(word, t("wordLookupLoading", "正在查词…"),
+      sourceLang, targetLang, x, y);
+    const handedOff = askBackground({
+      type: "translate", text: word, sourceLang, targetLang
+    }, (reply) => {
+      const translation = reply && reply.ok && typeof reply.translated === "string"
+        ? reply.translated.trim() : "";
+      cacheWordLookup(key, translation);
+      if (seq !== wordLookupSeq || key !== wordLookupIntent) return;
+      showWordPopup(word, translation || t("wordLookupUnavailable", "暂时查不到译义"),
+        sourceLang, targetLang, x, y);
+    });
+    if (!handedOff) hideWordLookup();
+  }
+
+  function onOriginalPointerMove(event) {
+    if (!settings.enabled || !settings.wordLookup || !settings.showOriginal || event.buttons) {
+      hideWordLookup();
+      return;
+    }
+    const target = event.target;
+    if (!target || !target.classList || !target.classList.contains("ytds-lookup-word")) {
+      scheduleWordLookupHide();
+      return;
+    }
+    const piece = segmentCaptionWords(target.textContent || "").find((part) => part.word);
+    const word = piece && piece.text.trim();
+    if (!word || word.length > 64) { scheduleWordLookupHide(); return; }
+    if (wordLookupHideTimer) { clearTimeout(wordLookupHideTimer); wordLookupHideTimer = 0; }
+    const sourceLang = cueSourceLang;
+    const targetLang = settings.targetLang;
+    const key = sourceLang + "\u0000" + targetLang + "\u0000" + word;
+    if (key === wordLookupIntent) return;
+    hideWordLookup();
+    wordLookupIntent = key;
+    const seq = wordLookupSeq;
+    wordLookupTimer = setTimeout(() => lookupHoveredWord(seq, key, word,
+      sourceLang, targetLang, event.clientX, event.clientY), WORD_LOOKUP_DELAY_MS);
   }
 
   // ---- karaoke: word-level highlight ---------------------------------------
@@ -749,6 +949,7 @@
 
   function setOriginalWithWords(cue) {
     if (!ensureOverlay()) return;
+    hideWordLookup();
     const pieces = buildWordPieces(cue);
     if (!pieces) {
       setOriginal(cue ? cue.text : "");
@@ -760,7 +961,7 @@
     const times = [];
     for (const p of pieces) {
       const span = document.createElement("span");
-      span.className = "ytds-w";
+      span.className = "ytds-w ytds-lookup-word";
       span.textContent = p.u;
       origEl.appendChild(span);
       spans.push(span);
@@ -1543,7 +1744,7 @@
       if (idx >= 0) {
         activeCueIdx = idx;
         if (!(keepFastPreview && fastPreviewIdx === idx &&
-              origEl?.textContent === displayCueList[idx].text)) {
+              lineText(origEl) === displayCueList[idx].text)) {
           fastPreviewIdx = -1;
           renderTranslationForCue(idx, displayCueList[idx]);
         }

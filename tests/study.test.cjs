@@ -346,3 +346,68 @@ test('the pointer listener stays inert in the other reveal modes', async () => {
   player.movePointer(640, 360);
   assert.ok(!player.overlayEl().classList.contains('ytds-pointer-on'));
 });
+
+test('hover lookup translates only the settled word and ignores stale replies', async () => {
+  const player = await mountContent({ sourceLang: 'de', cues: [
+    { start: 0, dur: 10000, text: 'Häuser und Autos.', trans: '房屋和汽车。' }
+  ], aligned: true });
+  player.at(0.1);
+  const original = player.originalEl();
+  const words = original.children.filter((child) => child.hasClass('ytds-lookup-word'));
+  assert.deepEqual(words.map((word) => word.textContent), ['Häuser', 'und', 'Autos']);
+  const hover = (word) => original.dispatch('pointermove', {
+    target: words.find((item) => item.textContent === word),
+    clientX: 500, clientY: 360, buttons: 0
+  });
+  hover('Häuser');
+  assert.equal(player.requests.some((item) => item.message.text === 'Häuser'), false,
+    'hover alone does not request a translation before the delay');
+  hover('und');
+  hover('Häuser');
+  player.runTimeouts();
+  const first = player.requests.findIndex((item) => item.message.text === 'Häuser');
+  assert.ok(first >= 0);
+  assert.equal(player.requests.some((item) => item.message.text === 'und'), false,
+    'passing over another word does not request it');
+  assert.equal(player.requests[first].message.sourceLang, 'de');
+  assert.equal(player.requests[first].message.targetLang, 'zh-CN');
+  hover('Autos');
+  player.runTimeouts();
+  const second = player.requests.findIndex((item) => item.message.text === 'Autos');
+  assert.ok(second > first);
+  const popup = player.player.children.find((child) => child.hasClass('ytds-word-popup'));
+  assert.equal(popup.children[0].textContent, 'Autos');
+  player.respond(first, { ok: true, translated: '房屋' });
+  assert.notEqual(popup.children[1].textContent, '房屋', 'old word cannot replace new word');
+  player.respond(second, { ok: true, translated: '汽车' });
+  assert.equal(popup.children[1].textContent, '汽车');
+  assert.equal(popup.children[3].href, 'https://www.godic.net/dicts/de/Autos');
+
+  original.dispatch('pointerdown', { target: words[2] });
+  assert.equal(popup.hidden, true, 'dragging selection closes the lookup');
+  const cachedRequestCount = player.requests.length;
+  hover('Autos');
+  player.runTimeouts();
+  assert.equal(player.requests.length, cachedRequestCount, 'revisiting a word uses the cache');
+  assert.equal(popup.children[1].textContent, '汽车');
+  player.changeSettings({ wordLookup: false });
+  const requestCount = player.requests.length;
+  hover('Häuser');
+  player.runTimeouts();
+  assert.equal(player.requests.length, requestCount, 'disabled lookup sends no request');
+});
+
+test('word lookup supports other source languages without a German dictionary link', async () => {
+  const player = await mountContent({ sourceLang: 'es', cues: [
+    { start: 0, dur: 10000, text: 'Hola mundo.', trans: '你好，世界。' }
+  ], aligned: true });
+  player.at(0.1);
+  const original = player.originalEl();
+  const word = original.children.find((child) => child.textContent === 'Hola');
+  original.dispatch('pointermove', { target: word, clientX: 500, clientY: 360, buttons: 0 });
+  player.runTimeouts();
+  const request = player.requests.find((item) => item.message.text === 'Hola');
+  assert.equal(request.message.sourceLang, 'es');
+  const popup = player.player.children.find((child) => child.hasClass('ytds-word-popup'));
+  assert.equal(popup.children[3].hidden, true);
+});

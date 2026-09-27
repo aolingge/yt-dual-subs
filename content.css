@@ -61,6 +61,44 @@ html.ytds-active .caption-window {
 
 .ytds-line:empty { display: none; }
 
+#ytds-overlay.ytds-word-lookup-on .ytds-orig .ytds-lookup-word:hover {
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 214, 92, .9);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.ytds-word-popup {
+  position: absolute;
+  z-index: 75;
+  box-sizing: border-box;
+  min-width: 160px;
+  max-width: min(320px, calc(100% - 16px));
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 220, 140, .38);
+  border-radius: 10px;
+  background: rgba(20, 23, 28, .97);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, .5);
+  color: #f5f5f5;
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  text-align: left;
+  pointer-events: auto;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+.ytds-word-popup[hidden], .ytds-word-popup-link[hidden] { display: none; }
+.ytds-word-popup-word { display: block; font-size: 16px; }
+.ytds-word-popup-meaning { margin-top: 4px; }
+.ytds-word-popup-meta { display: block; margin-top: 6px; color: #aeb9c7; font-size: 11px; }
+.ytds-word-popup-link {
+  display: inline-block;
+  margin-top: 9px;
+  color: #f1d27c;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ---- study mode: karaoke + translation reveal --------------------------- */
 /* The sentence keeps its normal look; only the word being spoken gets a soft
    box behind it (no colour change, so nothing "pops" word by word). */

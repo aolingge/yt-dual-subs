@@ -372,6 +372,7 @@
     const preset = {
       backend: "tlang", showOriginal: true,
       showTranslation: true, revealMode: "hover", karaoke: true,
+      wordLookup: true,
       studyRate: 0.75, repeatCount: 0
     };
     try {

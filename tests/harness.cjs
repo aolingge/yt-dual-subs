@@ -20,8 +20,10 @@ function element() {
   // highlight and the reveal modes put on an element, and so className and
   // classList stay consistent the way they do in the browser.
   const classes = new Set();
+  let ownText = '';
+  const elementListeners = {};
   const el = {
-    style: {}, textContent: '', isConnected: false, children: [],
+    style: {}, isConnected: false, children: [],
     classList: {
       add(...names) { names.forEach((n) => classes.add(n)); },
       remove(...names) { names.forEach((n) => classes.delete(n)); },
@@ -36,9 +38,24 @@ function element() {
     },
     hasClass(name) { return classes.has(name); },
     classNames() { return [...classes]; },
-    appendChild(child) { this.children.push(child); child.isConnected = true; },
-    addEventListener() {}, setAttribute() {}, click() {}, remove() {}
+    appendChild(child) {
+      this.children.push(child); child.isConnected = true; child.parentElement = this;
+    },
+    addEventListener(type, fn) {
+      (elementListeners[type] = elementListeners[type] || []).push(fn);
+    },
+    dispatch(type, extra = {}) {
+      for (const fn of elementListeners[type] || []) {
+        fn({ type, target: this, stopPropagation() {}, ...extra });
+      }
+    },
+    setAttribute() {}, click() {}, remove() {}
   };
+  Object.defineProperty(el, 'textContent', {
+    configurable: true,
+    get() { return ownText + this.children.map((child) => child.textContent).join(''); },
+    set(value) { ownText = String(value == null ? '' : value); this.children = []; }
+  });
   Object.defineProperty(el, 'className', {
     configurable: true,
     get() { return [...classes].join(' '); },
@@ -170,7 +187,7 @@ async function mountContent(options = {}) {
   }
 
   function overlayLines() {
-    const overlay = player.children[player.children.length - 1];
+    const overlay = player.children.slice().reverse().find((child) => child.id === 'ytds-overlay');
     if (!overlay || overlay.children.length < 2) return { original: '', translation: '' };
     const [translation, original] = overlay.children;
     return { original: textOf(original), translation: textOf(translation) };
@@ -248,14 +265,16 @@ async function mountContent(options = {}) {
       }
       return reply;
     },
-    overlayEl() { return player.children[player.children.length - 1]; },
+    overlayEl() {
+      return player.children.slice().reverse().find((child) => child.id === 'ytds-overlay');
+    },
     originalEl() {
       const overlay = api.overlayEl();
       return overlay && overlay.children.length >= 2 ? overlay.children[1] : null;
     },
     wordSpans() {
       const el = api.originalEl();
-      return el && el.children ? el.children.slice() : [];
+      return el && el.children ? el.children.filter((child) => child.hasClass('ytds-w')) : [];
     },
     activeWordIdx() {
       return api.wordSpans().findIndex((s) => s.classList.contains('ytds-w-on'));

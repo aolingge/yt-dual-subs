@@ -262,6 +262,16 @@
         <span class="pos-hint" data-i18n="karaokeHint">整句照常显示；只有自动生成的字幕带有词级时间，作者上传的字幕只显示整句</span>
       </div>
 
+      <div class="row check-row">
+        <label class="chk">
+          <input type="checkbox" id="wordLookup" />
+          <span data-i18n="wordLookupLabel">鼠标停在原文单词上时查词</span>
+        </label>
+      </div>
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="wordLookupHint">稍停后显示单词译义；德语词可点开德语助手详查。</span>
+      </div>
+
       <div class="pos-foot">
         <span class="pos-hint" data-i18n="studyKeyHint">快捷键：Alt+Shift+S 复读当前句 · Alt+Shift+U 显示/隐藏译文</span>
       </div>
@@ -353,7 +363,7 @@
   <!-- ============================ FOOTER ============================ -->
   <footer class="ft">
     <button id="reset" type="button" class="reset" data-i18n="resetAll">重置字幕设置</button>
-    <p class="ver">v<span id="version">3.6.0</span></p>
+    <p class="ver">v<span id="version">3.7.0</span></p>
   </footer>
 
   <script src="popup.js"></script>
