@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <!-- ============================ HEADER ============================ -->
+  <header class="hd">
+    <div class="hd-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="ytdsG" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#4db1ff"/>
+            <stop offset="1" stop-color="#1e7fd6"/>
+          </linearGradient>
+        </defs>
+        <rect width="32" height="32" rx="9" fill="url(#ytdsG)"/>
+        <rect x="7" y="11" width="13" height="3.4" rx="1.7" fill="#fff" opacity=".95"/>
+        <rect x="7" y="17.6" width="18" height="3.4" rx="1.7" fill="#fff" opacity=".7"/>
+      </svg>
+    </div>
+    <div class="hd-text">
+      <h1>YT Dual Subs</h1>
+      <p class="hd-sub" data-i18n="headerSub">双语字幕 · 单层渲染</p>
+    </div>
+    <label class="switch" title="启用 / 禁用" data-i18n-title="enableTitle">
+      <input type="checkbox" id="enabled" aria-label="启用扩展" data-i18n-aria="enableAria" />
+      <span class="switch-track"><span class="switch-thumb"></span></span>
+    </label>
+  </header>
+
+  <!-- ========================= LIVE PREVIEW ========================= -->
+  <section class="preview" id="preview" aria-label="实时预览" data-i18n-aria="previewAria">
+    <div class="preview-frame">
+      <div class="ytds-prev" id="prevOverlay">
+        <div class="ytds-prev-line ytds-prev-trans" id="prevTrans">敏捷的棕色狐狸</div>
+        <div class="ytds-prev-line ytds-prev-orig" id="prevOrig">The quick brown fox</div>
+      </div>
+      <span class="preview-tag" data-i18n="previewTag">预览</span>
+    </div>
+  </section>
+
+  <main class="ctrl">
+    <p class="status" id="statusLine" role="status" aria-live="polite" hidden></p>
+
+    <!-- ================= 当前视频（本页快捷操作） ================= -->
+    <section class="card">
+      <h2 class="card-title" data-i18n="secLive">当前视频</h2>
+
+      <div class="actions">
+        <button type="button" id="liveRepeat" data-i18n="liveRepeat">复读当前句</button>
+        <button type="button" id="liveReveal" data-i18n="liveReveal">显示 / 隐藏译文</button>
+        <button type="button" id="livePrev" data-i18n="livePrev">上一句</button>
+        <button type="button" id="liveNext" data-i18n="liveNext">下一句</button>
+      </div>
+      <p class="live-msg" id="liveMsg" role="status" aria-live="polite" hidden></p>
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="liveHint">只在 YouTube 视频页生效；「上一句」在句中按一次会先回到本句句首。</span>
+      </div>
+
+      <div class="row check-row">
+        <label class="chk">
+          <input type="checkbox" id="autoCaptions" />
+          <span data-i18n="autoCaptionsLabel">自动打开 YouTube 字幕</span>
+        </label>
+      </div>
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="autoCaptionsHint">关闭后由你自己点播放器上的字幕按钮，扩展仍会在上层显示双语字幕</span>
+      </div>
+
+      <div class="row">
+        <label data-i18n="shortcutLabel">快捷键</label>
+        <ul class="keys" id="shortcutList"></ul>
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="shortcutHint">浏览器只允许在它自己的页面里改键</span>
+          <button type="button" class="link" id="openShortcuts" data-i18n="openShortcuts">更改快捷键</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ 翻译 ============================ -->
+    <section class="card">
+      <h2 class="card-title" data-i18n="secTranslation">翻译</h2>
+
+      <div class="row">
+        <label for="targetLang" data-i18n="targetLang">目标语言</label>
+        <select id="targetLang">
+          <option value="zh-CN">中文（简体）</option>
+          <option value="zh-TW">中文（繁體）</option>
+          <option value="en">English</option>
+          <option value="ja">日本語</option>
+          <option value="ko">한국어</option>
+          <option value="es">Español</option>
+          <option value="fr">Français</option>
+          <option value="de">Deutsch</option>
+          <option value="ru">Русский</option>
+          <option value="pt">Português</option>
+          <option value="it">Italiano</option>
+          <option value="ar">العربية</option>
+          <option value="hi">हिन्दी</option>
+          <option value="id">Indonesia</option>
+          <option value="th">ไทย</option>
+          <option value="vi">Tiếng Việt</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label class="with-info">
+          <span data-i18n="backendLabel">翻译引擎</span>
+          <button type="button" class="info" id="backendInfo" aria-label="引擎说明"
+                  data-i18n-aria="backendInfo" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+            </svg>
+          </button>
+        </label>
+        <div class="seg" id="backend" role="group" aria-label="翻译引擎" data-i18n-aria="backendLabel">
+          <button data-val="tlang" type="button" data-i18n="backendTlang">整句翻译</button>
+          <button data-val="gtx" type="button" data-i18n="backendGtx">逐句翻译</button>
+          <button data-val="fast" type="button" data-i18n="backendFast">快速显示</button>
+        </div>
+        <p class="tip" id="backendTip" hidden data-i18n-html="backendTipHtml">
+          <b>整句翻译</b>：使用 YouTube 自带的整轨翻译，逐句对齐，免费。<br />
+          <b>逐句翻译</b>：调用 Google 免费接口逐句翻译；当整句翻译为空时使用，可能触发限流。<br />
+          <b>快速显示</b>：等待 YouTube 整轨译文时，把当前句发送给 Google 先显示；整轨译文返回后用于后续句子。可能触发限流。
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================ 布局 ============================ -->
+    <section class="card">
+      <h2 class="card-title" data-i18n="secLayout">布局</h2>
+
+      <div class="row">
+        <label data-i18n="orderLabel">上下顺序</label>
+        <div class="seg" id="order" role="group" aria-label="上下顺序" data-i18n-aria="orderLabel">
+          <button data-val="trans-top" type="button" data-i18n="orderTransTop">译文在上</button>
+          <button data-val="orig-top" type="button" data-i18n="orderOrigTop">原文在上</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <label data-i18n="positionLabel">位置</label>
+        <div class="seg" id="position" role="group" aria-label="位置" data-i18n-aria="positionLabel">
+          <button data-val="top" type="button" data-i18n="posTop">顶部</button>
+          <button data-val="center" type="button" data-i18n="posCenter">居中</button>
+          <button data-val="bottom" type="button" data-i18n="posBottom">底部</button>
+        </div>
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="posHint">也可直接在视频上拖动字幕框移动位置</span>
+          <button type="button" class="link" id="resetPos" data-i18n="resetPos">重置位置</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="rowGap"><span data-i18n="rowGap">行间距</span> <b id="rowGapV">4px</b></label>
+        <input type="range" id="rowGap" min="0" max="30" step="1" />
+      </div>
+
+      <div class="row">
+        <label for="offsetMs"><span data-i18n="offsetLabel">字幕同步</span> <b id="offsetMsV">0.0s</b></label>
+        <input type="range" id="offsetMs" min="-2000" max="2000" step="50" />
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="offsetHint">字幕出现太早往右调，太晚往左调</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 学习（复读 / 减速 / 译文显示） ================= -->
+    <section class="card">
+      <h2 class="card-title" data-i18n="secStudy">学习</h2>
+
+      <div class="row">
+        <label data-i18n="repeatLabel">复读次数</label>
+        <div class="seg" id="repeatCount" role="group" aria-label="复读次数" data-i18n-aria="repeatLabel">
+          <button data-val="0" type="button" data-i18n="repeatOff">关闭</button>
+          <button data-val="2" type="button">2</button>
+          <button data-val="3" type="button">3</button>
+          <button data-val="5" type="button">5</button>
+          <button data-val="-1" type="button" data-i18n="repeatLoop">循环</button>
+        </div>
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="repeatHint">播放完一句就倒回句首，方便跟读</span>
+        </div>
+      </div>
+
+      <div class="row">
+        <label data-i18n="studyRateLabel">复读语速</label>
+        <div class="seg" id="studyRate" role="group" aria-label="复读语速" data-i18n-aria="studyRateLabel">
+          <button data-val="1" type="button">1×</button>
+          <button data-val="0.75" type="button">0.75×</button>
+          <button data-val="0.6" type="button">0.6×</button>
+          <button data-val="0.5" type="button">0.5×</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <label data-i18n="revealLabel">译文显示</label>
+        <div class="seg" id="revealMode" role="group" aria-label="译文显示" data-i18n-aria="revealLabel">
+          <button data-val="always" type="button" data-i18n="revealAlways">始终</button>
+          <button data-val="hover" type="button" data-i18n="revealHover">悬停</button>
+          <button data-val="manual" type="button" data-i18n="revealManual">按键</button>
+        </div>
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="revealHint">先只听原文，需要时再看译文</span>
+        </div>
+      </div>
+
+      <div class="row check-row">
+        <label class="chk">
+          <input type="checkbox" id="karaoke" />
+          <span data-i18n="karaokeLabel">读到哪个词就框住哪个词</span>
+        </label>
+      </div>
+
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="karaokeHint">整句照常显示；只有自动生成的字幕带有词级时间，作者上传的字幕只显示整句</span>
+      </div>
+
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="studyKeyHint">快捷键：Alt+Shift+S 复读当前句 · Alt+Shift+U 显示/隐藏译文</span>
+      </div>
+    </section>
+
+    <!-- ====================== 行样式（标签页） ====================== -->
+    <section class="card">
+      <div class="tabs" id="lineTabs" role="tablist" aria-label="字幕行" data-i18n-aria="lineTabsAria">
+        <button class="tab" id="tab-trans" data-line="trans" type="button" role="tab"
+                aria-controls="lineEditor" aria-selected="true" data-i18n="tabTrans">译文</button>
+        <button class="tab" id="tab-orig" data-line="orig" type="button" role="tab"
+                aria-controls="lineEditor" aria-selected="false" data-i18n="tabOrig">原文</button>
+      </div>
+
+      <div id="lineEditor" role="tabpanel" aria-labelledby="tab-trans">
+        <div class="row check-row">
+          <label class="chk">
+            <input type="checkbox" id="lineShow" />
+            <span id="lineShowLabel" data-i18n="lineShow">显示该行</span>
+          </label>
+        </div>
+
+        <div class="row">
+          <label for="lineFont" data-i18n="fontLabel">字体</label>
+          <select id="lineFont">
+            <option value="system" data-i18n="fontSystem">系统默认</option>
+            <option value="roboto">Roboto</option>
+            <option value="noto">Noto Sans</option>
+            <option value="arial">Arial</option>
+            <option value="georgia">Georgia</option>
+            <option value="times">Times New Roman</option>
+            <option value="mono" data-i18n="fontMono">等宽 Mono</option>
+            <option value="cjk" data-i18n="fontCjk">适合中文</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label for="lineSize"><span data-i18n="sizeLabel">字号</span> <b id="lineSizeV">24px</b></label>
+          <input type="range" id="lineSize" min="12" max="48" step="1" />
+        </div>
+
+        <div class="grid3">
+          <div class="stack">
+            <label for="lineColor" data-i18n="colText">文字</label>
+            <input type="color" id="lineColor" aria-label="文字颜色" data-i18n-aria="colTextAria" />
+          </div>
+          <div class="stack">
+            <label for="lineBg" data-i18n="colBg">背景</label>
+            <input type="color" id="lineBg" aria-label="背景颜色" data-i18n-aria="colBgAria" />
+          </div>
+          <div class="stack">
+            <label for="lineStroke" data-i18n="colStroke">描边</label>
+            <input type="color" id="lineStroke" aria-label="描边颜色" data-i18n-aria="colStrokeAria" />
+          </div>
+        </div>
+
+        <div class="row">
+          <label for="lineBgOpacity"><span data-i18n="bgOpacity">背景不透明度</span> <b id="lineBgOpacityV">60%</b></label>
+          <input type="range" id="lineBgOpacity" min="0" max="1" step="0.05" />
+        </div>
+
+        <div class="row">
+          <label for="lineStrokeOpacity"><span data-i18n="strokeOpacity">描边不透明度</span> <b id="lineStrokeOpacityV">0%</b></label>
+          <input type="range" id="lineStrokeOpacity" min="0" max="1" step="0.05" />
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ 导出 ============================ -->
+    <section class="card">
+      <h2 class="card-title" data-i18n="secExport">导出字幕</h2>
+
+      <div class="row">
+        <label data-i18n="exportContent">导出内容</label>
+        <div class="seg" id="exportVariant" role="group" aria-label="导出内容" data-i18n-aria="exportContent">
+          <button data-val="bi" type="button" class="on" data-i18n="exportBi">双语</button>
+          <button data-val="orig" type="button" data-i18n="exportOrig">原文</button>
+          <button data-val="trans" type="button" data-i18n="exportTrans">译文</button>
+        </div>
+      </div>
+
+      <button id="exportBtn" type="button" class="export-btn" data-i18n="exportSrt">
+        下载 SRT 字幕
+      </button>
+      <p class="export-msg" id="exportMsg" role="status" aria-live="polite" hidden></p>
+    </section>
+  </main>
+
+  <!-- ============================ FOOTER ============================ -->
+  <footer class="ft">
+    <button id="reset" type="button" class="reset" data-i18n="resetAll">重置全部设置</button>
+    <p class="ver">v<span id="version">3.0.0</span></p>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
