@@ -57,14 +57,13 @@
       return;
     }
     const lang = String(status.sourceLang || "auto");
+    const target = String(status.targetLang || "");
     if (status.mode !== "cues" || lang === "auto") {
       el.textContent = t("studyUnknownTrack", "字幕语言未确认");
-    } else if (/^de(?:-|$)/i.test(lang)) {
-      el.textContent = t("studyGermanTrack", "德语原文轨") + " · " + lang;
-      el.classList.add("good");
     } else {
-      el.textContent = t("studyOtherTrack", "非德语轨") + " · " + lang;
-      el.classList.add("warn");
+      el.textContent = t("studySourceTrack", "原文轨") + " " + lang +
+        (target ? " → " + target : "");
+      el.classList.add("good");
     }
   }
 
@@ -369,9 +368,9 @@
     }
   }
 
-  async function applyGermanPreset() {
+  async function applyStudyPreset() {
     const preset = {
-      targetLang: "zh-CN", backend: "tlang", showOriginal: true,
+      backend: "tlang", showOriginal: true,
       showTranslation: true, revealMode: "hover", karaoke: true,
       studyRate: 0.75, repeatCount: 0
     };
@@ -379,14 +378,14 @@
       await chrome.storage.sync.set(preset);
       Object.assign(state, preset);
       bindUI();
-      say(t("studyPresetDone", "学习预设已启用；请确认 YouTube 选中德语原文轨。"), "ok");
+      say(t("studyPresetDone", "学习预设已启用，目标语言保持不变；请确认原文字幕轨。"), "ok");
     } catch (_e) {
       say(t("studyStoreFailed", "保存失败，请重试。"), "err");
     }
   }
 
   $study("transcriptSearch").placeholder = t("studySearch", "搜索这段视频的句子");
-  $study("germanPreset").addEventListener("click", applyGermanPreset);
+  $study("studyPreset").addEventListener("click", applyStudyPreset);
   $study("saveSentence").addEventListener("click", saveCurrent);
   $study("transcriptPanel").addEventListener("toggle", () => {
     if ($study("transcriptPanel").open) loadTranscript(true);

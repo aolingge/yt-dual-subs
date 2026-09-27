@@ -18,9 +18,9 @@ test('known subtitle language is used for short-sentence translation and cache i
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8'), {
     chrome, fetch, Map
   });
-  const request = (sourceLang) => new Promise((resolve) => {
+  const request = (sourceLang, targetLang = 'zh-CN') => new Promise((resolve) => {
     listeners.message({ type: 'translate', text: 'Hallo.',
-      targetLang: 'zh-CN', sourceLang }, {}, resolve);
+      targetLang, sourceLang }, {}, resolve);
   });
   assert.equal((await request('de')).translated, '你好。');
   assert.equal(new URL(urls[0]).searchParams.get('sl'), 'de');
@@ -28,4 +28,16 @@ test('known subtitle language is used for short-sentence translation and cache i
   assert.equal(urls.length, 1);
   await request(undefined);
   assert.equal(new URL(urls[1]).searchParams.get('sl'), 'auto');
+  await request('es', 'ja');
+  assert.equal(new URL(urls[2]).searchParams.get('sl'), 'es');
+  assert.equal(new URL(urls[2]).searchParams.get('tl'), 'ja');
+  await request('ar', 'nl');
+  assert.equal(new URL(urls[3]).searchParams.get('sl'), 'ar');
+  assert.equal(new URL(urls[3]).searchParams.get('tl'), 'nl');
+  await request('zh-Hans', 'pt-BR');
+  assert.equal(new URL(urls[4]).searchParams.get('sl'), 'zh-Hans');
+  assert.equal(new URL(urls[4]).searchParams.get('tl'), 'pt-BR');
+  await request('not a language', 'pt-BR');
+  assert.equal(new URL(urls[5]).searchParams.get('sl'), 'auto');
+  assert.equal(urls.length, 6, 'source and target languages have separate cache entries');
 });

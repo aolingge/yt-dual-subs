@@ -6,6 +6,50 @@ const assert = require('node:assert/strict');
 
 const { mountContent } = require('./harness.cjs');
 
+test('unspaced Japanese and Thai fragments join without inserted spaces', async () => {
+  const japanese = await mountContent({ sourceLang: 'ja', cues: [
+    { start: 0, dur: 500, text: 'こんに' },
+    { start: 500, dur: 500, text: 'ちは。' }
+  ], aligned: true });
+  japanese.at(0.6);
+  assert.equal(japanese.read().original, 'こんにちは。');
+
+  const thai = await mountContent({ sourceLang: 'th', cues: [
+    { start: 0, dur: 500, text: 'สวัส' },
+    { start: 500, dur: 500, text: 'ดีครับ' }
+  ], aligned: true });
+  thai.at(0.6);
+  assert.equal(thai.read().original, 'สวัสดีครับ');
+});
+
+test('Arabic captions retain word spaces and their source-language status', async () => {
+  const player = await mountContent({ sourceLang: 'ar', cues: [
+    { start: 0, dur: 500, text: 'مرحبا' },
+    { start: 500, dur: 500, text: 'بك.' }
+  ], aligned: true });
+  player.at(0.6);
+  assert.equal(player.read().original, 'مرحبا بك.');
+  assert.equal(player.status().sourceLang, 'ar');
+});
+
+test('Arabic and Hindi sentence punctuation separates spoken lines', async () => {
+  const arabic = await mountContent({ sourceLang: 'ar', cues: [
+    { start: 0, dur: 500, text: 'كيف حالك؟' },
+    { start: 500, dur: 500, text: 'أنا بخير.' }
+  ], aligned: true });
+  arabic.at(0.2);
+  assert.equal(arabic.read().original, 'كيف حالك؟');
+  arabic.at(0.7);
+  assert.equal(arabic.read().original, 'أنا بخير.');
+
+  const hindi = await mountContent({ sourceLang: 'hi', cues: [
+    { start: 0, dur: 500, text: 'नमस्ते।' },
+    { start: 500, dur: 500, text: 'आप कैसे हैं?' }
+  ], aligned: true });
+  hindi.at(0.7);
+  assert.equal(hindi.read().original, 'आप कैसे हैं?');
+});
+
 const TWO = [
   { start: 0, dur: 1000, text: 'Erste.' },
   { start: 1000, dur: 1000, text: 'Zweite.' }

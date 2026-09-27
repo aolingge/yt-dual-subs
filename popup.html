@@ -83,12 +83,12 @@
     <!-- ============================ VIDEO STUDY ============================ -->
     <section class="card study-workspace" aria-labelledby="studyWorkspaceTitle">
       <div class="study-heading">
-        <h2 class="card-title" id="studyWorkspaceTitle" data-i18n="studyWorkspaceTitle">德语视频学习</h2>
+        <h2 class="card-title" id="studyWorkspaceTitle" data-i18n="studyWorkspaceTitle">视频语言学习</h2>
         <span class="study-source" id="studySource" role="status">—</span>
       </div>
-      <p class="study-hint" data-i18n="studyTrackHint">先在 YouTube 字幕菜单选择德语原文轨，再开始学习。</p>
+      <p class="study-hint" data-i18n="studyTrackHint">在 YouTube 选择原文字幕轨，并在下方设置想要的译文语言。</p>
       <div class="study-actions">
-        <button id="germanPreset" type="button" data-i18n="studyPreset">使用学习预设</button>
+        <button id="studyPreset" type="button" data-i18n="studyPreset">使用学习预设</button>
         <button id="saveSentence" type="button" data-i18n="studySave">收藏当前句</button>
       </div>
       <details class="study-details" id="transcriptPanel">
@@ -135,7 +135,17 @@
           <option value="id">Indonesia</option>
           <option value="th">ไทย</option>
           <option value="vi">Tiếng Việt</option>
+          <option value="__custom__" data-i18n="targetOther">其他语言代码…</option>
         </select>
+        <div class="target-custom" id="targetLangCustomRow" hidden>
+          <input id="targetLangCustom" type="text" maxlength="32" autocomplete="off"
+                 autocapitalize="off" spellcheck="false" inputmode="text"
+                 placeholder="例如 nl、tr、uk、pt-BR" data-i18n-placeholder="targetCustomPlaceholder"
+                 aria-label="目标语言代码" data-i18n-aria="targetCustomLabel" />
+          <button id="targetLangApply" type="button" data-i18n="targetCustomApply">应用</button>
+        </div>
+        <p class="target-custom-hint" id="targetLangMessage" role="status"
+           data-i18n="targetCustomHint">列表外可输入语言代码；可用性取决于字幕轨和翻译服务。</p>
       </div>
 
       <div class="row">
@@ -343,7 +353,7 @@
   <!-- ============================ FOOTER ============================ -->
   <footer class="ft">
     <button id="reset" type="button" class="reset" data-i18n="resetAll">重置字幕设置</button>
-    <p class="ver">v<span id="version">3.5.0</span></p>
+    <p class="ver">v<span id="version">3.6.0</span></p>
   </footer>
 
   <script src="popup.js"></script>

@@ -32,7 +32,7 @@ A clean‑room, open‑source **Manifest V3** extension. It reads the video's re
 - **Everything in the popup.** The popup's *Current video* card repeats the sentence on screen, shows or hides the translation, and steps to the previous or next sentence — the same actions as the shortcuts, without leaving the popup. It lists the keys the browser actually assigned and opens the shortcut page in one click.
 - **You keep the caption switch.** *Turn YouTube captions on for me* can be turned off, and then the extension never touches the player's own CC button: you pick the track, the overlay still draws on top of it.
 - **Hover reveal works in fullscreen.** The reveal follows where the pointer actually is instead of a `:hover` selector, which is permanently true once the player fills the screen.
-- **German video study.** The popup identifies the original caption-track language, lets you search and jump between sentences, and saves difficult lines for replay and translation-hidden review. A study preset enables original text, Chinese translation on hover, and a 0.75× repeat speed.
+- **Video language study.** The popup identifies the original caption-track and target languages, lets you search and jump between sentences, and saves difficult lines for replay and translation-hidden review. A study preset enables original text, translation on hover, and a 0.75× repeat speed while keeping your chosen target language.
 - **Selectable subtitle text.** Drag-select and copy either line without pausing the player. Hover translation hides as soon as the pointer leaves the player or browser window.
 
 ## How it works
@@ -69,7 +69,7 @@ Works on Chrome, Edge, and other Chromium browsers. Requires Chrome 111+ (for th
 - **Alt+Shift+S** repeats the sentence on screen at the study rate (press again to stop). **Alt+Shift+U** shows/hides the translation line when the reveal mode is *Manual*. Both keys can be changed under `edge://extensions/shortcuts`.
 - **Study mode** (popup → *Study*): repeat count, repeat speed, word box, and how the translation line is revealed.
 - **Current video** (popup → *Current video*): the same four actions as the keys, as buttons — repeat the sentence on screen, show/hide the translation, previous sentence, next sentence. *Previous* restarts the sentence you are in once it is under way, and steps back to the one before when you press it within the first second of a sentence. Changing the keys themselves is a browser-side setting, so the card links straight to it and shows what the browser assigned. Turn off *Turn YouTube captions on for me* to choose the caption track yourself — the overlay keeps working on whatever you enable.
-- **German video study** (popup → *Learn German with video*): select the original German track in YouTube's caption menu first. Search and jump through sentences, save difficult lines, replay them, reveal their translation for self-testing, and mark them learned. Saved lines stay in this browser's extension-local storage. Export/import a JSON backup to move them; import merges without replacing existing lines. *Reset subtitle settings* leaves them alone.
+- **Video language study** (popup → *Learn languages with video*): select the original caption track in YouTube, then choose the translation target. Select *Other language code…* for a target outside the built-in list (for example `nl`, `tr`, `uk`, or `pt-BR`). Search and jump through sentences, save difficult lines, replay them, reveal their translation for self-testing, and mark them learned. Saved lines stay in this browser's extension-local storage. Export/import a JSON backup to move them; import merges without replacing existing lines. *Reset subtitle settings* leaves them alone.
 - **Complete bilingual SRT only.** Export checks translation timestamps too. If spoken lines are missing or misaligned, translated/bilingual export stops and reports the count; original-only export remains available.
 
 ## Translation engines
@@ -77,11 +77,13 @@ Works on Chrome, Edge, and other Chromium browsers. Requires Chrome 111+ (for th
 | | Whole‑sentence (`tlang`) — default | Per‑sentence (`gtx`) |
 |---|---|---|
 | Source | YouTube's own server‑side translation | Google Translate's free endpoint |
-| Alignment | Perfect, cue‑for‑cue | Per sentence (prefetched) |
-| Best for | Highest quality once the track loads | When YouTube can't translate a track, or you prefer Google's wording |
+| Alignment | Paired by cue order and checked against timestamps | Per displayed sentence |
+| Best for | When YouTube provides a translated track | When YouTube can't translate a track, or you prefer Google's wording |
 | Note | Auto‑falls back to `gtx` when a track isn't translatable | Unofficial endpoint — heavy use may be rate‑limited |
 
 Per‑sentence translation tells Google the caption track's language explicitly (e.g. `de`) instead of leaving it to auto‑detection, which has too little to work with on a few‑word subtitle; auto‑detection is used only when no track language is known (screen‑caption fallback). The cache is keyed by source language + target language + text, so one video's translation is never reused for a different source.
+
+The original caption track is not restricted to German: English, Spanish, Japanese, Arabic, and other tracks use the same caption and translation path. Custom target codes let you try more languages, but a video needs captions and translation availability depends on YouTube or Google; no extension can guarantee every language on every video.
 
 **Fast display** (optional): sends the current sentence to Google while waiting for YouTube's whole-track translation. Once the YouTube track arrives, later sentences use it; the already-visible sentence is not rewritten. Google rate limits or errors leave the extension waiting for YouTube. This mode sends the current sentence to Google even when YouTube translation eventually succeeds.
 

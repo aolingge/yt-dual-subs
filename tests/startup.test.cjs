@@ -4,6 +4,50 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+test('caption capture keeps each source language and the selected translation target', async () => {
+  for (const sourceLang of ['es', 'ja', 'ar']) {
+    const listeners = {};
+    const requests = [];
+    const posted = [];
+    const fetch = (url) => new Promise((resolve) => requests.push({ url, resolve }));
+    const window = {
+      fetch,
+      addEventListener(type, listener) { listeners[type] = listener; },
+      postMessage(message) { posted.push(message); }
+    };
+    class XMLHttpRequest {
+      open(_method, url) { this.url = url; }
+      send() {}
+    }
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'inject.js'), 'utf8'), {
+      window, fetch, XMLHttpRequest, URL,
+      location: { href: 'https://www.youtube.com/watch?v=sample' },
+      performance: { getEntriesByType: () => [] },
+      setInterval() {}, setTimeout() { return 1; }, clearTimeout() {}
+    });
+    listeners.message({ source: window, data: {
+      source: 'ytds-content', type: 'config', targetLang: 'nl',
+      useTlang: true, nonce: 1
+    } });
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', `https://www.youtube.com/api/timedtext?v=sample&lang=${sourceLang}&pot=token`);
+    xhr.send();
+    const original = requests.find((r) => !new URL(r.url).searchParams.has('tlang'));
+    const translated = requests.find((r) => new URL(r.url).searchParams.has('tlang'));
+    assert.equal(new URL(original.url).searchParams.get('lang'), sourceLang);
+    assert.equal(new URL(translated.url).searchParams.get('tlang'), 'nl');
+    const response = (text) => ({ ok: true, text: async () => JSON.stringify({
+      events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: text }] }]
+    }) });
+    original.resolve(response('Original.'));
+    await new Promise(setImmediate);
+    translated.resolve(response('Translated.'));
+    await new Promise(setImmediate);
+    assert.equal(posted.at(-1).sourceLang, sourceLang);
+    assert.equal(posted.at(-1).cues[0].trans, 'Translated.');
+  }
+});
+
 test('the original and translated tracks start together and the original is posted first', async () => {
   const listeners = {};
   const requests = [];

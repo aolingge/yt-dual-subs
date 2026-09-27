@@ -152,6 +152,21 @@ select {
 }
 select:hover { border-color: #454545; }
 select:focus { border-color: var(--accent); }
+.target-custom { display: flex; gap: 6px; }
+.target-custom[hidden] { display: none; }
+.target-custom input {
+  flex: 1; min-width: 0; padding: 8px 10px; font-size: 12px;
+  color: var(--txt); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px;
+}
+.target-custom input:focus { outline: 1px solid var(--accent); }
+.target-custom button {
+  padding: 7px 12px; color: var(--txt); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px; cursor: pointer;
+}
+.target-custom button:hover { border-color: var(--accent); }
+.target-custom-hint { margin: 0; font-size: 10px; color: var(--muted); line-height: 1.4; }
+.target-custom-hint.err { color: #ff9a93; }
 
 /* segmented control */
 .seg {

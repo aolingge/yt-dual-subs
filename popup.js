@@ -133,6 +133,10 @@ function applyI18n() {
     const m = chrome.i18n.getMessage(el.getAttribute("data-i18n-aria"));
     if (m) el.setAttribute("aria-label", m);
   });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const m = chrome.i18n.getMessage(el.getAttribute("data-i18n-placeholder"));
+    if (m) el.setAttribute("placeholder", m);
+  });
 }
 
 // per-line key prefixing so one set of controls edits either line.
@@ -367,7 +371,12 @@ function bindLineControls() {
 // ---- bind whole UI from state -------------------------------------------
 function bindUI() {
   $("enabled").checked = state.enabled;
-  $("targetLang").value = state.targetLang;
+  const targetSelect = $("targetLang");
+  const listedTarget = Array.from(targetSelect.options).some((option) =>
+    option.value === state.targetLang);
+  targetSelect.value = listedTarget ? state.targetLang : "__custom__";
+  $("targetLangCustomRow").hidden = listedTarget;
+  if (!listedTarget) $("targetLangCustom").value = state.targetLang;
   $("rowGap").value = state.rowGap;
   $("rowGapV").textContent = state.rowGap + "px";
   $("offsetMs").value = state.offsetMs;
@@ -383,7 +392,40 @@ function bindUI() {
 // ---- wire events ---------------------------------------------------------
 function wire() {
   $("enabled").addEventListener("change", (e) => setKey("enabled", e.target.checked));
-  $("targetLang").addEventListener("change", (e) => setKey("targetLang", e.target.value));
+  $("targetLang").addEventListener("change", (e) => {
+    const custom = e.target.value === "__custom__";
+    $("targetLangCustomRow").hidden = !custom;
+    if (custom) $("targetLangCustom").focus();
+    else {
+      $("targetLangMessage").textContent = t("targetCustomHint",
+        "列表外可输入语言代码；可用性取决于字幕轨和翻译服务。");
+      $("targetLangMessage").classList.remove("err");
+      setKey("targetLang", e.target.value);
+    }
+  });
+  const applyCustomTarget = async () => {
+    const code = $("targetLangCustom").value.trim();
+    const message = $("targetLangMessage");
+    if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(code)) {
+      message.textContent = t("targetCustomInvalid", "请输入有效语言代码，例如 nl、tr 或 pt-BR。");
+      message.classList.add("err");
+      return;
+    }
+    try {
+      await chrome.storage.sync.set({ targetLang: code });
+      state.targetLang = code;
+      bindUI();
+      message.textContent = t("targetCustomDone", "目标语言已设置：") + " " + code;
+      message.classList.remove("err");
+    } catch (_e) {
+      message.textContent = t("targetCustomSaveFailed", "保存目标语言失败，请重试。");
+      message.classList.add("err");
+    }
+  };
+  $("targetLangApply").addEventListener("click", applyCustomTarget);
+  $("targetLangCustom").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") applyCustomTarget();
+  });
 
   // backend info tooltip
   $("backendInfo").addEventListener("click", () => {

@@ -432,8 +432,10 @@
     overlay.setAttribute("translate", "no");
     transEl = document.createElement("div");
     transEl.className = "ytds-line ytds-trans";
+    transEl.setAttribute("dir", "auto");
     origEl = document.createElement("div");
     origEl.className = "ytds-line ytds-orig";
+    origEl.setAttribute("dir", "auto");
     // Text is selectable, but selecting it must not click/pause the player.
     for (const line of [transEl, origEl]) {
       for (const type of ["pointerdown", "mousedown", "mouseup", "click", "dblclick"]) {
@@ -449,10 +451,9 @@
     return overlay;
   }
 
-  // A small round grip in the overlay's top-left corner. It is the only
-  // pointer-events:auto child; all drag listeners are attached to it (plus
-  // pointer capture), so removing the overlay removes every listener with no
-  // document-level leaks across SPA navigation.
+  // A small round grip in the overlay's top-left corner. Drag listeners are
+  // attached only to it (plus pointer capture), so removing the overlay removes
+  // every listener with no document-level leaks across SPA navigation.
   function buildHandle() {
     handleEl = document.createElement("div");
     handleEl.className = "ytds-handle";
@@ -1297,7 +1298,9 @@
   // The closer set must include the German/Swiss quotes („ … “, « … » and
   // ‹ … ›): without them a fragment ending „Hallo.“ was not recognised as a
   // sentence end at all and got merged with the next sentence.
-  const SENTENCE_END_RE = /[.!?。！？]["'”’“„«»‹›」』】〕）)\]]*$/;
+  const SENTENCE_END_RE = /[.!?。！？؟۔॥।։።፧]["'”’“„«»‹›」』】〕）)\]]*$/;
+  const UNSPACED_END_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]$/u;
+  const UNSPACED_START_RE = /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u;
 
   function endsSentence(text, nextText) {
     const s = String(text || "").trim();
@@ -1310,8 +1313,10 @@
 
   function appendCaptionText(left, right) {
     if (!right) return left;
-    const noSpace = /^[,.;:!?。，！？；：)\]}]/.test(right) ||
-      /[\u3400-\u9fff]$/.test(left) || /^[\u3400-\u9fff]/.test(right);
+    // These scripts normally join written fragments without spaces. Inserting
+    // English-style spaces into Japanese kana or Thai captions changes the text.
+    const noSpace = /^[,.;:!?。，、！？；：؟۔॥।։።፧)\]}]/.test(right) ||
+      UNSPACED_END_RE.test(left) || UNSPACED_START_RE.test(right);
     return left + (noSpace ? "" : " ") + right;
   }
 

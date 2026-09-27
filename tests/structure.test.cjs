@@ -49,7 +49,7 @@ test('every localized string the extension asks for exists in all three locales'
     locales[name] = JSON.parse(read(path.join('_locales', name, 'messages.json')));
   }
   const asked = new Set();
-  for (const m of read('popup.html').matchAll(/data-i18n(?:-html|-title|-aria)?="([^"]+)"/g)) {
+  for (const m of read('popup.html').matchAll(/data-i18n(?:-html|-title|-aria|-placeholder)?="([^"]+)"/g)) {
     asked.add(m[1]);
   }
   for (const file of ['popup.js', 'study.js', 'content.js']) {
