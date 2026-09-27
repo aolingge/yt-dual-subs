@@ -32,6 +32,8 @@ A clean‑room, open‑source **Manifest V3** extension. It reads the video's re
 - **Everything in the popup.** The popup's *Current video* card repeats the sentence on screen, shows or hides the translation, and steps to the previous or next sentence — the same actions as the shortcuts, without leaving the popup. It lists the keys the browser actually assigned and opens the shortcut page in one click.
 - **You keep the caption switch.** *Turn YouTube captions on for me* can be turned off, and then the extension never touches the player's own CC button: you pick the track, the overlay still draws on top of it.
 - **Hover reveal works in fullscreen.** The reveal follows where the pointer actually is instead of a `:hover` selector, which is permanently true once the player fills the screen.
+- **German video study.** The popup identifies the original caption-track language, lets you search and jump between sentences, and saves difficult lines for replay and translation-hidden review. A study preset enables original text, Chinese translation on hover, and a 0.75× repeat speed.
+- **Selectable subtitle text.** Drag-select and copy either line without pausing the player. Hover translation hides as soon as the pointer leaves the player or browser window.
 
 ## How it works
 
@@ -67,6 +69,8 @@ Works on Chrome, Edge, and other Chromium browsers. Requires Chrome 111+ (for th
 - **Alt+Shift+S** repeats the sentence on screen at the study rate (press again to stop). **Alt+Shift+U** shows/hides the translation line when the reveal mode is *Manual*. Both keys can be changed under `edge://extensions/shortcuts`.
 - **Study mode** (popup → *Study*): repeat count, repeat speed, word box, and how the translation line is revealed.
 - **Current video** (popup → *Current video*): the same four actions as the keys, as buttons — repeat the sentence on screen, show/hide the translation, previous sentence, next sentence. *Previous* restarts the sentence you are in once it is under way, and steps back to the one before when you press it within the first second of a sentence. Changing the keys themselves is a browser-side setting, so the card links straight to it and shows what the browser assigned. Turn off *Turn YouTube captions on for me* to choose the caption track yourself — the overlay keeps working on whatever you enable.
+- **German video study** (popup → *Learn German with video*): select the original German track in YouTube's caption menu first. Search and jump through sentences, save difficult lines, replay them, reveal their translation for self-testing, and mark them learned. Saved lines stay in this browser's extension-local storage. Export/import a JSON backup to move them; import merges without replacing existing lines. *Reset subtitle settings* leaves them alone.
+- **Complete bilingual SRT only.** Export checks translation timestamps too. If spoken lines are missing or misaligned, translated/bilingual export stops and reports the count; original-only export remains available.
 
 ## Translation engines
 
@@ -91,7 +95,7 @@ Every Google request is timeout-guarded: an attempt that never answers is aborte
 
 ## Privacy
 
-No analytics, no tracking, no accounts. Default mode prefers YouTube and falls back to Google when translation is unavailable; per-sentence mode uses Google; Fast display uses both, sending the current sentence to Google while waiting. Settings are stored in `chrome.storage.sync`.
+No analytics, no tracking, no accounts. Default mode prefers YouTube and falls back to Google when translation is unavailable; per-sentence mode uses Google; Fast display uses both, sending the current sentence to Google while waiting. Settings are stored in `chrome.storage.sync`. Saved sentences use `chrome.storage.local` and do not sync automatically; export a backup before uninstalling the extension.
 
 ## Development
 
@@ -103,6 +107,7 @@ Plain vanilla JS/CSS — no build step, no dependencies.
 | `content.js` | Overlay, cue engine, drag, control‑bar toggle, rendered‑scrape fallback |
 | `background.js` | Translation service worker (Google endpoint) |
 | `popup.html/.css/.js` | Settings UI with live preview |
+| `study.js` | Sentence browser, local saved-list and review UI |
 | `content.css` | Overlay styling + native‑caption suppression |
 
 ### Tests

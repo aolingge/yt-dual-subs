@@ -219,6 +219,49 @@ test('sentence stepping answers "nocue" when no subtitles are loaded', async () 
     { ok: false, reason: 'nocue' });
 });
 
+test('study list searches grouped sentences and jumps to the selected one', async () => {
+  const player = await mountContent({ cues: TWO, aligned: true, sourceLang: 'de' });
+  const list = player.request({ type: 'studyCues', query: 'zweite', offset: 0, limit: 40 });
+  assert.equal(list.ok, true);
+  assert.equal(list.sourceLang, 'de');
+  assert.equal(list.total, 1);
+  assert.equal(list.entries[0].index, 1);
+  assert.equal(list.entries[0].text, 'Zweite.');
+  assert.equal(player.request({ type: 'studySeek', videoId: 'other', index: 1 }).ok, false);
+  assert.equal(player.request({ type: 'studySeek', videoId: 'sample',
+    index: 1, expectedStart: 9000 }).reason, 'changed');
+  assert.equal(player.request({ type: 'studySeek', videoId: 'sample', index: 1 }).ok, true);
+  assert.equal(player.video.currentTime, 1);
+  assert.equal(player.request({ type: 'studyCurrent' }).cue.text, 'Zweite.');
+  assert.equal(player.status().sourceLang, 'de');
+});
+
+test('bilingual export refuses an incomplete translated track', async () => {
+  const player = await mountContent({ cues: [
+    { start: 0, dur: 1000, text: 'Erste.', trans: '第一句。' },
+    { start: 1000, dur: 1000, text: 'Zweite.', trans: '' }
+  ], aligned: true });
+  const result = await player.exportVariant('bi');
+  assert.deepEqual({ ...result }, { ok: false, reason: 'partial', missing: 1 });
+});
+
+test('export cannot reuse one translated cue for two spoken lines', async () => {
+  const cues = [
+    { start: 0, dur: 1000, text: 'Hallo.' },
+    { start: 500, dur: 1000, text: 'Guten Morgen.' }
+  ];
+  const player = await mountContent({ cues, aligned: false, tcues: [] });
+  const pending = player.exportVariant('bi');
+  const request = player.outbound.find((message) => message.type === 'export-request');
+  assert.ok(request);
+  player.sendInject({
+    type: 'exportdata', exportId: request.exportId, ok: true,
+    aligned: false, cues, tcues: [{ start: 0, dur: 1000, text: '你好。' }]
+  });
+  const result = await pending;
+  assert.deepEqual({ ...result }, { ok: false, reason: 'partial', missing: 1 });
+});
+
 // ---- pointer reveal (the fullscreen fix) ----------------------------------
 test('hover mode reveals while the pointer is on the player and hides again', async () => {
   const player = await mountContent({ cues: TWO, aligned: true, settings: { revealMode: 'hover' } });
@@ -238,7 +281,17 @@ test('a pointer move outside the player does not reveal', async () => {
   const player = await mountContent({ cues: TWO, aligned: true, settings: { revealMode: 'hover' } });
   player.at(0.1);
 
+  player.movePointer(640, 360);
+  assert.ok(player.overlayEl().classList.contains('ytds-pointer-on'));
   player.movePointer(2000, 900);                    // outside the fake player rect
+  assert.ok(!player.overlayEl().classList.contains('ytds-pointer-on'));
+});
+
+test('leaving the browser window hides hover translation immediately', async () => {
+  const player = await mountContent({ cues: TWO, aligned: true, settings: { revealMode: 'hover' } });
+  player.movePointer(640, 360);
+  assert.ok(player.overlayEl().classList.contains('ytds-pointer-on'));
+  player.fire('pointerout', { relatedTarget: null });
   assert.ok(!player.overlayEl().classList.contains('ytds-pointer-on'));
 });
 

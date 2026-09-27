@@ -38,6 +38,10 @@ html.ytds-active .caption-window {
 
 .ytds-line {
   display: inline-block;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -69,16 +73,16 @@ html.ytds-active .caption-window {
 
 /* "listen first" mode: keep the translation hidden until the pointer is over
    the player, or until the reveal shortcut is pressed (manual mode). */
-.ytds-reveal-hover .ytds-trans { opacity: 0; transition: opacity 0.12s linear; }
+.ytds-reveal-hover .ytds-trans { opacity: 0; pointer-events: none; transition: opacity 0.12s linear; }
 /* The reveal class is switched by content.js (ytds-pointer-on) rather than by a
    :hover selector: in fullscreen the player fills the viewport, so :hover on it
    is true all the time and the line could never hide again. */
-.ytds-reveal-hover.ytds-pointer-on .ytds-trans { opacity: 1; }
+.ytds-reveal-hover.ytds-pointer-on .ytds-trans { opacity: 1; pointer-events: auto; }
 .ytds-reveal-hidden .ytds-trans { visibility: hidden; }
 
 /* ---- draggable handle -------------------------------------------------- */
 /* The overlay itself stays pointer-events:none so the player keeps receiving
-   clicks; only this small grip is interactive. It sits at the overlay's
+   clicks outside subtitle text; this grip is interactive. It sits at the overlay's
    top-left corner, faint until the pointer is near the player/overlay. */
 .ytds-handle {
   position: absolute;
@@ -93,7 +97,7 @@ html.ytds-active .caption-window {
   display: grid;
   place-items: center;
   cursor: move;
-  pointer-events: auto;        /* the ONE interactive child */
+  pointer-events: auto;
   opacity: 0;
   transition: opacity .15s ease;
   touch-action: none;          /* let pointer drag work without scroll/zoom */

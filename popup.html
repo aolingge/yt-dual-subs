@@ -80,6 +80,38 @@
       </div>
     </section>
 
+    <!-- ============================ VIDEO STUDY ============================ -->
+    <section class="card study-workspace" aria-labelledby="studyWorkspaceTitle">
+      <div class="study-heading">
+        <h2 class="card-title" id="studyWorkspaceTitle" data-i18n="studyWorkspaceTitle">德语视频学习</h2>
+        <span class="study-source" id="studySource" role="status">—</span>
+      </div>
+      <p class="study-hint" data-i18n="studyTrackHint">先在 YouTube 字幕菜单选择德语原文轨，再开始学习。</p>
+      <div class="study-actions">
+        <button id="germanPreset" type="button" data-i18n="studyPreset">使用学习预设</button>
+        <button id="saveSentence" type="button" data-i18n="studySave">收藏当前句</button>
+      </div>
+      <details class="study-details" id="transcriptPanel">
+        <summary><span data-i18n="studyTranscript">逐句浏览</span><span id="transcriptCount"></span></summary>
+        <div class="study-details-body">
+          <input id="transcriptSearch" type="search" autocomplete="off"
+                 aria-label="搜索这段视频的句子" data-i18n-aria="studySearch" />
+          <div class="study-list" id="transcriptList"></div>
+          <button class="study-more" id="transcriptMore" type="button" hidden data-i18n="studyMore">加载更多</button>
+        </div>
+      </details>
+      <details class="study-details" id="savedPanel">
+        <summary><span data-i18n="studySaved">收藏复习</span><span id="savedCount"></span></summary>
+        <div class="study-list study-details-body" id="savedList"></div>
+        <div class="study-library-actions">
+          <button id="studyExport" type="button" data-i18n="studyExport">导出收藏</button>
+          <button id="studyImportButton" type="button" data-i18n="studyImport">导入收藏</button>
+          <input id="studyImportFile" type="file" accept=".json,application/json" hidden />
+        </div>
+      </details>
+      <p class="study-msg" id="studyMsg" role="status" aria-live="polite" hidden></p>
+    </section>
+
     <!-- ============================ 翻译 ============================ -->
     <section class="card">
       <h2 class="card-title" data-i18n="secTranslation">翻译</h2>
@@ -310,10 +342,11 @@
 
   <!-- ============================ FOOTER ============================ -->
   <footer class="ft">
-    <button id="reset" type="button" class="reset" data-i18n="resetAll">重置全部设置</button>
-    <p class="ver">v<span id="version">3.0.0</span></p>
+    <button id="reset" type="button" class="reset" data-i18n="resetAll">重置字幕设置</button>
+    <p class="ver">v<span id="version">3.5.0</span></p>
   </footer>
 
   <script src="popup.js"></script>
+  <script src="study.js"></script>
 </body>
 </html>

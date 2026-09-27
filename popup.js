@@ -263,6 +263,10 @@ function statusText(s) {
   else if (s.mode === "scrape") parts.push(t("statusScrape", "字幕源：画面字幕（无可用字幕轨）"));
   else parts.push(t("statusIdle", "还没收到字幕，播放几秒后会自动加载"));
   if (s.cueCount) parts.push(s.cueCount + " " + t("statusLines", "句"));
+  if (s.mode === "cues") {
+    const lang = String(s.sourceLang || "auto");
+    parts.push(t("statusSourceLanguage", "原文轨") + "：" + lang);
+  }
   if (s.transSource === "youtube") parts.push(t("statusTransYoutube", "译文：YouTube 整轨"));
   else if (s.transSource === "google") parts.push(t("statusTransGoogle", "译文：Google 免费接口"));
   else if (s.transSource === "waiting") parts.push(t("statusTransWaiting", "译文：等待中"));
@@ -317,6 +321,9 @@ async function onExportClick() {
       showExportMsg(t("exportDone", "已下载字幕") + " (" + (resp.count || 0) + ")", "ok");
     } else if (resp.reason === "notrans") {
       showExportMsg(t("exportNoTrans", "这个视频拿不到译文，试试「整句翻译」或换个目标语言。"), "err");
+    } else if (resp.reason === "partial") {
+      showExportMsg(t("exportPartial", "译文缺失，已停止导出以免错行。") +
+        " (" + resp.missing + ")", "err");
     } else {
       showExportMsg(t("exportNoCues", "没有可下载的字幕，先播放几秒让字幕加载，再试一次。"), "err");
     }
@@ -535,7 +542,9 @@ function fillShortcuts() {
   chrome.commands.getAll((cmds) => {
     if (chrome.runtime.lastError || !cmds) return;
     list.textContent = "";
-    cmds.forEach((c) => {
+    cmds.filter((c) => [
+      "toggle-translation", "repeat-sentence", "reveal-translation"
+    ].includes(c.name)).forEach((c) => {
       const li = document.createElement("li");
       const kbd = document.createElement("kbd");
       kbd.textContent = c.shortcut || t("shortcutNone", "未设置");

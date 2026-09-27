@@ -34,8 +34,10 @@ test('the content script and the popup agree on every setting and its default', 
 test('every element the popup script touches exists in the popup markup', () => {
   const ids = new Set([...read('popup.html').matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
   const referenced = new Set();
-  for (const m of read('popup.js').matchAll(/\$\("([^"]+)"\)|getElementById\("([^"]+)"\)/g)) {
-    referenced.add(m[1] || m[2]);
+  for (const file of ['popup.js', 'study.js']) {
+    for (const m of read(file).matchAll(/\$\("([^"]+)"\)|\$study\("([^"]+)"\)|getElementById\("([^"]+)"\)/g)) {
+      referenced.add(m[1] || m[2] || m[3]);
+    }
   }
   assert.ok(referenced.size > 10, 'the popup wiring was actually scanned');
   assert.deepEqual([...referenced].filter((id) => !ids.has(id)).sort(), []);
@@ -50,7 +52,7 @@ test('every localized string the extension asks for exists in all three locales'
   for (const m of read('popup.html').matchAll(/data-i18n(?:-html|-title|-aria)?="([^"]+)"/g)) {
     asked.add(m[1]);
   }
-  for (const file of ['popup.js', 'content.js']) {
+  for (const file of ['popup.js', 'study.js', 'content.js']) {
     for (const m of read(file).matchAll(/\bt\(\s*["']([A-Za-z0-9_]+)["']/g)) asked.add(m[1]);
   }
   assert.ok(asked.size > 20, 'the localization scan found the UI strings');

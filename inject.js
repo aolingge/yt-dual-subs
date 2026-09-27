@@ -298,7 +298,9 @@
           aligned = cues.length === tcues.length;
           if (aligned) {
             for (let i = 0; i < cues.length; i++) {
-              cues[i].trans = tcues[i] ? tcues[i].text : "";
+              cues[i].trans = tcues[i] &&
+                Math.abs(cues[i].start - tcues[i].start) <= 1200
+                ? tcues[i].text : "";
             }
           }
         } catch (_e) {

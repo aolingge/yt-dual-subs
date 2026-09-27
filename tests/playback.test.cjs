@@ -137,7 +137,8 @@ test('the status snapshot describes what the page is doing', async () => {
   const snapshot = player.status();
   // spread out of the vm realm so deepEqual compares values, not prototypes
   assert.deepEqual({ ...snapshot }, {
-    ok: true, version: MANIFEST_VERSION, enabled: true, backend: 'tlang', targetLang: 'zh-CN',
+    ok: true, version: MANIFEST_VERSION, videoId: 'sample', enabled: true,
+    backend: 'tlang', targetLang: 'zh-CN', sourceLang: 'de',
     mode: 'cues', source: 'youtube', transSource: 'youtube', cueCount: 1,
     pending: false, cached: false, cooldownSec: 0
   });

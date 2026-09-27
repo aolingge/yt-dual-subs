@@ -434,6 +434,12 @@
     transEl.className = "ytds-line ytds-trans";
     origEl = document.createElement("div");
     origEl.className = "ytds-line ytds-orig";
+    // Text is selectable, but selecting it must not click/pause the player.
+    for (const line of [transEl, origEl]) {
+      for (const type of ["pointerdown", "mousedown", "mouseup", "click", "dblclick"]) {
+        line.addEventListener(type, (event) => event.stopPropagation());
+      }
+    }
 
     overlay.appendChild(transEl);
     overlay.appendChild(origEl);
@@ -662,7 +668,8 @@
   function applyRevealState() {
     if (!overlay) return;
     const mode = revealModeValue();
-    // "hover": hidden until the pointer moves over the player (content.css).
+    // "hover": visible only while the pointer is over the player and recently
+    // moved. Leaving the player clears it immediately, including mid-sentence.
     overlay.classList.toggle("ytds-reveal-hover", mode === "hover");
     if (mode !== "hover") clearHoverReveal();
     // "manual": hidden until the reveal shortcut is pressed for THIS sentence.
@@ -675,17 +682,24 @@
   function onPointerMove(e) {
     if (!overlay || revealModeValue() !== "hover") return;
     const player = getPlayer();
-    if (!player) return;
+    if (!player) { clearHoverReveal(); return; }
     const r = player.getBoundingClientRect();
-    if (!r || !r.width || !r.height) return;
+    if (!r || !r.width || !r.height) { clearHoverReveal(); return; }
     if (e.clientX < r.left || e.clientX > r.right ||
-        e.clientY < r.top || e.clientY > r.bottom) return;
+        e.clientY < r.top || e.clientY > r.bottom) {
+      clearHoverReveal();
+      return;
+    }
     overlay.classList.add("ytds-pointer-on");
     if (hoverHideTimer) clearTimeout(hoverHideTimer);
     hoverHideTimer = setTimeout(() => {
       hoverHideTimer = 0;
       if (overlay) overlay.classList.remove("ytds-pointer-on");
     }, HOVER_HOLD_MS);
+  }
+
+  function onWindowPointerOut(e) {
+    if (!e.relatedTarget && revealModeValue() === "hover") clearHoverReveal();
   }
 
   function clearWordSpans() {
@@ -1607,6 +1621,7 @@
     cueList = null;
     displayCueList = null;
     tcueList = null;
+    cueVideoId = "";
     cueSourceLang = "auto";
     translationPending = false;
     fastPreviewIdx = -1;
@@ -1644,9 +1659,11 @@
     return {
       ok: true,
       version: liveVersion(),
+      videoId: currentVideoId,
       enabled: !!settings.enabled,
       backend: settings.backend,
       targetLang: settings.targetLang,
+      sourceLang: cueSourceLang,
       mode,                                 // cues | scrape | off
       source: cueVideoId ? "youtube" : (lastSource ? "native" : "none"),
       transSource,                          // youtube | google | waiting | none
@@ -1667,8 +1684,82 @@
     }
   }
 
+  function studyEntry(index) {
+    const cue = displayCueList && displayCueList[index];
+    if (!cue) return null;
+    const cached = transCache.get(cueVideoId + " " + index);
+    const activeText = index === activeCueIdx ? lineText(transEl) : "";
+    return {
+      index,
+      start: cue.start,
+      text: cue.text,
+      trans: activeText || (!cue.transIncomplete ? cue.trans : "") || cached || ""
+    };
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg) return;
+    if (msg.type === "studyCues") {
+      if (!displayCueList || !displayCueList.length) {
+        sendResponse({ ok: false, reason: "nocue" });
+        return;
+      }
+      const query = String(msg.query || "").trim().slice(0, 100).toLocaleLowerCase();
+      const requestedOffset = Number(msg.offset);
+      const requestedLimit = Number(msg.limit);
+      const offset = Number.isFinite(requestedOffset)
+        ? Math.max(0, Math.floor(requestedOffset)) : 0;
+      const limit = Number.isFinite(requestedLimit)
+        ? Math.max(1, Math.min(80, Math.floor(requestedLimit))) : 40;
+      const indices = [];
+      for (let i = 0; i < displayCueList.length; i++) {
+        if (!query || displayCueList[i].text.toLocaleLowerCase().includes(query)) indices.push(i);
+      }
+      sendResponse({
+        ok: true, videoId: currentVideoId, title: videoTitle(),
+        sourceLang: cueSourceLang, total: indices.length,
+        entries: indices.slice(offset, offset + limit).map(studyEntry)
+      });
+      return;
+    }
+    if (msg.type === "studyCurrent") {
+      const video = getVideo();
+      const index = video && displayCueList
+        ? activeCueIdxAt(video.currentTime * 1000 + (Number(settings.offsetMs) || 0))
+        : -1;
+      const cue = studyEntry(index);
+      sendResponse(cue
+        ? { ok: true, videoId: currentVideoId, title: videoTitle(),
+            sourceLang: cueSourceLang, cue }
+        : { ok: false, reason: "nocue" });
+      return;
+    }
+    if (msg.type === "studySeek") {
+      const index = Number(msg.index);
+      const video = getVideo();
+      if (msg.videoId !== currentVideoId || !Number.isInteger(index) ||
+          index < 0 || !displayCueList || index >= displayCueList.length || !video) {
+        sendResponse({ ok: false, reason: "nocue" });
+        return;
+      }
+      if (msg.expectedStart != null) {
+        const expectedStart = Number(msg.expectedStart);
+        if (!Number.isFinite(expectedStart) ||
+            Math.abs(expectedStart - displayCueList[index].start) > 200) {
+          sendResponse({ ok: false, reason: "changed" });
+          return;
+        }
+      }
+      stopRepeat();
+      repeatDoneIdx = -1;
+      try { video.currentTime = displayCueList[index].start / 1000; }
+      catch (_e) { sendResponse({ ok: false, reason: "seek" }); return; }
+      activeCueIdx = -1;
+      cueDirty = true;
+      cueTick();
+      sendResponse({ ok: true, index });
+      return;
+    }
     if (msg.type === "status") {
       sendResponse(pageStatus());
       return;
@@ -1870,22 +1961,29 @@
     }
   }
 
-  // When orig/tlang counts differ, fill each cue's translation by nearest
-  // timestamp (same tolerance as the live misaligned path).
+  // When orig/tlang counts differ, match by timestamp at most once per translated
+  // cue. Duplicating one translation across two original lines is misleading.
   function fillTransByTimestamp(cues, tcues) {
     if (!tcues || !tcues.length) return;
+    const used = new Set();
     for (const c of cues) {
-      let best = null, bd = Infinity;
-      for (const tc of tcues) {
+      if (!stripSoundDescriptions(c.text).trim()) continue;
+      let bestIndex = -1, bd = Infinity;
+      for (let i = 0; i < tcues.length; i++) {
+        if (used.has(i)) continue;
+        const tc = tcues[i];
         const d = Math.abs(tc.start - c.start);
-        if (d < bd) { bd = d; best = tc; }
+        if (d < bd) { bd = d; bestIndex = i; }
       }
-      if (best && bd <= 1200 && best.text) c.trans = best.text;
+      if (bestIndex >= 0 && bd <= 1200 && tcues[bestIndex].text) {
+        c.trans = tcues[bestIndex].text;
+        used.add(bestIndex);
+      }
     }
   }
 
   // Main export entry. Returns a serializable result for the popup:
-  //   { ok:true, count, variant } | { ok:false, reason:"nocues"|"notrans" }
+  //   { ok:true, count, variant } | { ok:false, reason:"nocues"|"notrans"|"partial" }
   async function handleExport(variant) {
     const v = (variant === "orig" || variant === "trans") ? variant : "bi";
 
@@ -1920,6 +2018,9 @@
 
     if (!cues || !cues.length) return { ok: false, reason: "nocues" };
     if (!cues.some((c) => c.trans)) return { ok: false, reason: "notrans" };
+    const missing = cues.filter((c) =>
+      stripSoundDescriptions(c.text).trim() && !(c.trans || "").trim()).length;
+    if (missing) return { ok: false, reason: "partial", missing };
 
     const built = buildSrt(cues, v);
     if (!built.count) return { ok: false, reason: "notrans" };
@@ -2028,6 +2129,7 @@
   window.addEventListener("loadedmetadata", onPlaybackJump, true);
   window.addEventListener("visibilitychange", onPlaybackJump, true);
   window.addEventListener("pointermove", onPointerMove, true);
+  window.addEventListener("pointerout", onWindowPointerOut, true);
 
   // ---- boot ----------------------------------------------------------------
   loadSettings().then(() => {

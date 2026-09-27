@@ -86,6 +86,7 @@ async function mountContent(options = {}) {
   const timers = [];
   const timeouts = [];
   const requests = [];
+  const outbound = [];
   const storageWrites = [];
   const location = { href: `https://www.youtube.com/watch?v=${videoId}` };
   const time = clock();
@@ -113,7 +114,7 @@ async function mountContent(options = {}) {
     addEventListener(type, listener) {
       (listeners[type] = listeners[type] || []).push(listener);
     },
-    postMessage() {}
+    postMessage(message) { outbound.push(message); }
   };
   const chrome = {
     i18n: {
@@ -191,7 +192,7 @@ async function mountContent(options = {}) {
   }
 
   const api = {
-    requests, storageWrites, timers, timeouts, video, player,
+    requests, outbound, storageWrites, timers, timeouts, video, player,
     get cueLoopCount() { return timers.length; },
     read: overlayLines,
     tick,
@@ -221,6 +222,7 @@ async function mountContent(options = {}) {
     },
     changeLanguage(language) { return api.changeSettings({ targetLang: language }); },
     sendCues(data) { return post({ type: 'cues', ...data }); },
+    sendInject(data) { return post(data); },
     updateTranslation(nextCues, nextTcues, nextAligned, nonce) {
       return post({ type: 'cues', translationUpdate: true, cues: nextCues,
         tcues: nextTcues, aligned: nextAligned, nonce });
@@ -268,6 +270,11 @@ async function mountContent(options = {}) {
     exportOriginal() {
       return new Promise((resolve) => {
         listeners.runtimeMessage({ type: 'exportSrt', variant: 'orig' }, {}, resolve);
+      });
+    },
+    exportVariant(variant) {
+      return new Promise((resolve) => {
+        listeners.runtimeMessage({ type: 'exportSrt', variant }, {}, resolve);
       });
     },
     runDebounce() {

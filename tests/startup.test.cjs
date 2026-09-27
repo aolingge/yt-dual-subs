@@ -98,6 +98,46 @@ test('equal cue counts do not accept a translation fragment with the wrong time'
   assert.equal(posted[1].cues[1].trans, '');
 });
 
+test('SRT export also rejects translated fragments with mismatched timestamps', async () => {
+  const listeners = {};
+  const requests = [];
+  const posted = [];
+  const fetch = (url) => new Promise((resolve) => requests.push({ url, resolve }));
+  const window = {
+    fetch,
+    addEventListener(type, listener) { listeners[type] = listener; },
+    postMessage(message) { posted.push(message); }
+  };
+  class XMLHttpRequest {
+    open(_method, url) { this.url = url; }
+    send() {}
+  }
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'inject.js'), 'utf8'), {
+    window, fetch, XMLHttpRequest, URL,
+    location: { href: 'https://www.youtube.com/watch?v=sample' },
+    performance: { getEntriesByType: () => [] },
+    setInterval() {}, setTimeout() { return 1; }, clearTimeout() {}
+  });
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', 'https://www.youtube.com/api/timedtext?v=sample&lang=de&pot=token');
+  xhr.send();
+  listeners.message({ source: window, data: {
+    source: 'ytds-content', type: 'export-request', targetLang: 'zh-CN', exportId: 8
+  } });
+  const original = requests.find((r) => !new URL(r.url).searchParams.has('tlang'));
+  const response = (events) => ({ ok: true, text: async () => JSON.stringify({ events }) });
+  const event = (start, text) => ({ tStartMs: start, dDurationMs: 1000,
+    segs: [{ utf8: text }] });
+  original.resolve(response([event(0, 'Hallo.'), event(3000, 'Tschüss.')]));
+  await new Promise(setImmediate);
+  const translated = requests.find((r) => new URL(r.url).searchParams.has('tlang'));
+  translated.resolve(response([event(0, '你好。'), event(6000, '再见。')]));
+  await new Promise(setImmediate);
+  assert.equal(posted[0].type, 'exportdata');
+  assert.equal(posted[0].cues[0].trans, '你好。');
+  assert.equal(posted[0].cues[1].trans, '');
+});
+
 // A player whose CC menu has "de" selected, so inject.js may seed the source URL
 // from the track list instead of waiting for the player's own timedtext request.
 function seedSetup() {
