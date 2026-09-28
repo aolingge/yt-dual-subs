@@ -1,134 +1,175 @@
-# YT Dual Subs
+<p align="center">
+  <img src="icons/icon128.png" alt="YT Dual Subs icon" width="72" />
+</p>
 
-> Bilingual subtitles for YouTube — the original language and your translation shown together as a single, non‑overlapping layer that switches cleanly sentence by sentence.
+<h1 align="center">YT Dual Subs</h1>
 
-**中文说明 → [README.zh-CN.md](README.zh-CN.md)**
+<p align="center"><strong>Learn languages from the videos you already watch.</strong><br />
+Original captions, translations, word lookup, and sentence practice — right on YouTube.</p>
 
-A clean‑room, open‑source **Manifest V3** extension. It reads the video's real caption track, translates it, and renders both languages in one tidy overlay you can fully style and drag — no overlap, no word‑by‑word flicker.
+<p align="center">
+  <a href="https://github.com/aolingge/yt-dual-subs/releases/latest">Download the latest version</a> ·
+  <a href="#install">Install</a> ·
+  <a href="README.zh-CN.md">中文说明</a> ·
+  <a href="https://github.com/aolingge/yt-dual-subs/issues">Report an issue</a>
+</p>
 
----
+<p align="center">
+  <img alt="Version 3.8.1" src="https://img.shields.io/badge/version-3.8.1-3ea6ff" />
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
+  <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
+  <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
+</p>
 
-## Features
+![Original German captions and Chinese translation displayed together, above the player controls](docs/images/bilingual-subtitles.png)
 
-- **Dual subtitles, one layer.** Original and translation each have their own area and wrap onto multiple lines when needed. YouTube's own caption layer is hidden, so the two never overlap.
-- **Per‑sentence, no jitter.** Adjacent timed caption cues are joined into readable sentences and shown from the sentence start. Long pauses and excessively long unpunctuated text are split safely; screen-caption fallback cannot look ahead.
-- **Sound cues hidden.** Common bracketed labels such as `[musik]` and `[音乐]` are removed from the on-screen subtitles while spoken text and ordinary brackets stay intact. SRT exports retain the original cues.
-- **Two translation engines, three modes.** YouTube whole-track translation is the default, with a Google backup after a 1.5 s wait; per-sentence mode uses Google's free endpoint; Fast display immediately prepares the current and next two sentences through Google while YouTube loads.
-- **Fully customizable.** Per‑line font, size, text colour, background colour + opacity, outline, line spacing, and which line sits on top. Live preview in the popup.
-- **Draggable.** Grab the handle and drop the subtitle box anywhere on the video; it persists, double‑click to reset. Works in fullscreen.
-- **One‑click toggle.** A button in the player's control bar turns the whole thing on/off (and YouTube's CC with it) — handy for videos with burned‑in subtitles.
-- **Export to SRT.** Download the current video's subtitles as a standard `.srt` file — original, translation, or bilingual — straight from the popup.
-- **Robust.** Survives SPA navigation, falls back to reading the on‑screen caption text if the cue fetch ever fails, and turns YouTube captions on for you automatically.
+*Actual v3.8.1 extension interface with an illustrated demo scene and sample captions. A video needs available YouTube captions; translation availability depends on the provider.*
 
-- **Survives an extension reload.** The older script detects its dead extension context, stops quietly and restores YouTube's native caption visibility. Refresh the tab to pick up the new extension version.
-- **Already watched? Instant.** The cues of videos you opened in this session are kept in memory, so going back to one paints its subtitles immediately while the page refreshes them in the background.
-- **Subtitle sync nudge.** If the lines sit slightly early or late against the audio, the popup's sync slider shifts them by up to ±2 s. Exported SRT timing is left untouched.
-- **Live status line.** The popup reports what the current tab is doing: waiting for YouTube, reading Google, how many sentences are loaded, whether the free endpoint is cooling down after a rate limit, and which version is loaded.
-- **Idle when nothing changes.** The overlay stops re-rendering while the video is paused or the tab is in the background, and paints again at once after a seek or a settings change.
-- **Study mode: repeat & slow down.** Replay the sentence on screen 2, 3 or 5 times, or loop it, at 0.75× / 0.6× / 0.5×; the normal rate comes back when the repeat stops. `Alt+Shift+S` repeats the current sentence at any time.
-- **The word being spoken is boxed, not popped.** The sentence is always shown in full and the word currently being spoken gets a soft background box behind it, so the line stays readable while you follow the audio. Word timings only exist on auto-generated tracks; author-written captions show whole sentences.
-- **Listen first, then check.** The translation line can be *always* visible, revealed on *hover* over the player, or shown only when you ask for it with `Alt+Shift+U`.
-- **Starts sooner.** Native caption text is mirrored immediately while the full track loads; caption DOM changes repaint directly, with a 120 ms polling backup. The original track and translation load in parallel. A stale guessed URL is dropped without replacing a newer player capture. Both fetches have deadlines, including response bodies, so a hung request cannot leave the startup path stuck.
-- **Keeps both lines synchronized.** Cue rendering follows the video clock every 60 ms and immediately after play or seek events. Translation callbacks check that clock again before painting; an overdue translation can never replace the sentence currently playing. Upcoming sentences are prefetched so their translations can already be ready when their originals appear.
-- **Everything in the popup.** The popup's *Current video* card repeats the sentence on screen, shows or hides the translation, and steps to the previous or next sentence — the same actions as the shortcuts, without leaving the popup. It lists the keys the browser actually assigned and opens the shortcut page in one click.
-- **You keep the caption switch.** *Turn YouTube captions on for me* can be turned off, and then the extension never touches the player's own CC button: you pick the track, the overlay still draws on top of it.
-- **Hover reveal works in fullscreen.** The reveal follows where the pointer actually is instead of a `:hover` selector, which is permanently true once the player fills the screen.
-- **Video language study.** The popup identifies the original caption-track and target languages, lets you search and jump between sentences, and saves difficult lines for replay and translation-hidden review. A study preset enables original text, translation on hover, and a 0.75× repeat speed while keeping your chosen target language.
-- **Selectable subtitle text.** Drag-select and copy either line without pausing the player. Hover translation hides as soon as the pointer leaves the player or browser window.
-- **Captions fit the player.** Windowed, theater, and miniplayer layouts reduce oversized text using the actual player dimensions. The native control bar always has a clear area; preset and dragged positions remain within the player. Fullscreen restores your preferred sizes, with long captions reduced further if needed. Resizing never rewrites saved sizes or positions.
-- **Resizable subtitle box.** Drag the left or right grip to narrow or widen the box while keeping the opposite edge fixed. Manual widths fill both subtitle backgrounds and are saved as 20–96% of the player, including across fullscreen changes. Text reflows within the chosen width; subtitle selection and native controls keep working.
-- **Word lookup on hover.** Pause over a word in the original captions for about 0.4 seconds to see a translation from the existing Google backend. Moving to another word invalidates the old result; repeated lookups use a bounded in-page cache. German words also offer a link to the German Assistant dictionary, opened only when clicked. Isolated word translations can differ from the meaning in context, so use the sentence and dictionary for ambiguous words. You can turn lookup off in Study settings.
+## Make every caption useful
 
-## How it works
+| When you want to… | YT Dual Subs helps you… |
+| --- | --- |
+| Follow a video in another language | Read the original and translation together in one organized overlay. German, English, Spanish, Japanese, Arabic, and other caption languages use the same workflow. |
+| Understand an unfamiliar word | Hover over a word for a translation. German words also have a **German Assistant** dictionary link. Drag to select and copy either subtitle line. |
+| Train your listening | Hide the translation, reveal it on hover or by shortcut, and replay a sentence at a slower speed. |
+| Remember a useful phrase | Search the transcript, jump to a sentence, save it, and review it later with the translation hidden. |
+| Keep the picture comfortable | Move the box, drag either edge to adjust its width, and set each line's font, color, and background. Layout adapts to smaller players and fullscreen. |
+| Take your study material with you | Export original, translated, or bilingual SRT files, and back up saved sentences as JSON. |
 
-YouTube serves caption tracks from an `/api/timedtext` endpoint that now requires a per‑request **proof‑of‑origin token** (`pot`). An extension can't just fetch a track URL on its own — it gets an empty response. So instead:
+**Free to use · Open source · No extension account · No API key required.**
 
-1. A MAIN‑world script (`inject.js`) passively watches the page (XHR, `fetch`, and Resource Timing) and captures the **player's own** timedtext request, which already carries a valid `pot`.
-2. It re‑fetches that exact URL as `json3` for the original cues, and again with `&tlang=` for YouTube's translation — aligned cue‑for‑cue. Pairing is also timestamp‑checked: a fragment whose start is off by more than ~1.2 s is rejected, and that sentence is translated as a whole instead, so a plausible‑looking line can never land beside the wrong original.
-3. `content.js` groups adjacent cues for display, then drives the overlay off `video.currentTime`. Raw cues remain available for SRT export.
-4. While waiting for a track, it reads on-screen captions immediately; this path also remains available if the cue fetch fails. Native text is hidden only once the extension can replace it or has a loaded track owning the current caption gap.
+### Look up a word without leaving the video
 
-## Install (load unpacked)
+Pause the pointer on an original-caption word for about 0.4 seconds. The lookup card appears beside it; moving away closes it. Dictionary pages open only when you click their link. Word translations can be ambiguous, so keep the sentence context in mind.
 
-1. **Download the latest release ZIP** from the [Releases page](https://github.com/Gythiro/yt-dual-subs/releases/latest) and unzip it. *(Prefer the command line? `git clone` works too.)*
-2. Open `chrome://extensions`.
-3. Turn on **Developer mode** (top‑right).
-4. Click **Load unpacked** and select the unzipped folder.
-5. Open a YouTube video with captions — the subtitles appear automatically (the extension turns captions on for you).
+![Hovering over Spaziergang shows its translation and a German Assistant dictionary link](docs/images/hover-word-lookup.png)
 
-Works on Chrome, Edge, and other Chromium browsers. Requires Chrome 111+ (for the MAIN‑world content script).
+### Turn watching into practice
 
-**Updating:** click the reload icon on the extension's card in `chrome://extensions`, then refresh any YouTube tab that was already open — a page keeps the script it was loaded with until it is refreshed.
+1. Choose the original caption track in YouTube and your translation language in the extension.
+2. Click **Use study preset** to keep the original visible, reveal translations on hover, and repeat at 0.75×.
+3. Use **Repeat sentence**, **Previous**, and **Next** to practice a difficult line.
+4. Save useful sentences, then review them with the translation hidden. Mark them learned when ready.
 
-## Usage
+<table>
+  <tr>
+    <td align="center"><strong>Search, jump, and save</strong></td>
+    <td align="center"><strong>Make the layout yours</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/sentence-study.png" alt="Actual extension sentence browser with a German caption track and saved sentence" width="350" /></td>
+    <td valign="top"><img src="docs/images/layout-settings.png" alt="Actual settings for subtitle position, width, spacing, and synchronization" width="350" /></td>
+  </tr>
+</table>
 
-- **Toolbar icon** → settings popup: target language, translation engine, line order, position, spacing, and per‑line styling, all with a live preview.
-- **Control-bar button** (the caption icon next to the gear): one-click on/off. Blue = on, grey = off.
-- **Alt+Shift+Y**: show/hide only the translated subtitle line. If the key is unavailable, set it under `edge://extensions/shortcuts`.
-- **Drag** the subtitle box by its handle (appears top‑left when you hover the player); **double‑click** the handle to reset its position.
-- **Export** (popup → *Export*): download the subtitles as an `.srt` file — choose original, translation, or bilingual.
+## Install
 
-- **Subtitles a touch early or late?** Popup → *Sync offset*: shift the cue timing by up to ±2 s. Only what you see moves; exported `.srt` timing keeps the original.
-- **Something missing?** The status line at the top of the popup says whether the tab is running on YouTube's track, on Google, or still waiting, how many sentences are loaded, and whether the free endpoint is cooling down.
-- **Alt+Shift+S** repeats the sentence on screen at the study rate (press again to stop). **Alt+Shift+U** shows/hides the translation line when the reveal mode is *Manual*. Both keys can be changed under `edge://extensions/shortcuts`.
-- **Study mode** (popup → *Study*): repeat count, repeat speed, word box, and how the translation line is revealed.
-- **Current video** (popup → *Current video*): the same four actions as the keys, as buttons — repeat the sentence on screen, show/hide the translation, previous sentence, next sentence. *Previous* restarts the sentence you are in once it is under way, and steps back to the one before when you press it within the first second of a sentence. Changing the keys themselves is a browser-side setting, so the card links straight to it and shows what the browser assigned. Turn off *Turn YouTube captions on for me* to choose the caption track yourself — the overlay keeps working on whatever you enable.
-- **Video language study** (popup → *Learn languages with video*): select the original caption track in YouTube, then choose the translation target. Select *Other language code…* for a target outside the built-in list (for example `nl`, `tr`, `uk`, or `pt-BR`). Search and jump through sentences, save difficult lines, replay them, reveal their translation for self-testing, and mark them learned. Saved lines stay in this browser's extension-local storage. Export/import a JSON backup to move them; import merges without replacing existing lines. *Reset subtitle settings* leaves them alone.
-- **Word lookup** (popup → *Study* → *Look up words by hovering*): pause the pointer on a word in the original video caption. Dragging to select text does not request a lookup. German Assistant opens only when you click *More in German Assistant*; hovering never opens an external site.
-- **Automatic layout**: font-size sliders set the preferred full-player size. A smaller player scales the text down and wraps both lines above the controls. Extremely long text in a tiny player can be scrolled inside the subtitle area without losing words.
-- **Box width** (popup → *Layout* → *Subtitle box width*): drag either side grip or use the width slider. Settings are saved when a drag ends. Double-click a side grip or select *Reset width* to return to automatic sizing; this keeps your font preferences. Focus a side grip and use the arrow keys for small width adjustments.
-- **Complete bilingual SRT only.** Export checks translation timestamps too. If spoken lines are missing or misaligned, translated/bilingual export stops and reports the count; original-only export remains available.
+For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load unpacked**.
 
-## Translation engines
+1. [Download yt-dual-subs-3.8.1.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.8.1/yt-dual-subs-3.8.1.zip) and extract it to a folder you will keep.
+2. Open `edge://extensions` in Edge, or `chrome://extensions` in Chrome.
+3. Turn on **Developer mode**, then click **Load unpacked**.
+4. Select the extracted **yt-dual-subs** folder — the one containing `manifest.json`.
+5. Open a YouTube video with captions. The extension normally turns CC on for you; you can disable that option.
+6. Pin the toolbar icon, open its popup, and choose your target language.
 
-| | Whole‑sentence (`tlang`) — default | Per‑sentence (`gtx`) |
-|---|---|---|
-| Source | YouTube's own server‑side translation | Google Translate's free endpoint |
-| Alignment | Paired by cue order and checked against timestamps | Per displayed sentence |
-| Best for | When YouTube provides a translated track | When YouTube can't translate a track, or you prefer Google's wording |
-| Note | Auto‑falls back to `gtx` when a track isn't translatable | Unofficial endpoint — heavy use may be rate‑limited |
+**Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
 
-Per‑sentence translation tells Google the caption track's language explicitly (e.g. `de`) instead of leaving it to auto‑detection, which has too little to work with on a few‑word subtitle; auto‑detection is used only when no track language is known (screen‑caption fallback). The cache is keyed by source language + target language + text, so one video's translation is never reused for a different source.
+Browser references: [Edge sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome unpacked extension guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked).
 
-The original caption track is not restricted to German: English, Spanish, Japanese, Arabic, and other tracks use the same caption and translation path. Custom target codes let you try more languages, but a video needs captions and translation availability depends on YouTube or Google; no extension can guarantee every language on every video.
+<details>
+<summary>Prefer installing from source?</summary>
 
-**Fast display**: immediately sends the current sentence and next two sentences to Google while YouTube's whole-track translation loads. Whole-sentence mode gives YouTube a 1.5 s head start before starting that backup. Once the YouTube track arrives, later sentences use it; a Google translation already visible on the current sentence is kept to avoid flicker. Native caption preview can translate through Google before the full source track arrives. This makes the original independent of translation latency; network speed still controls how soon a new translation is available.
+```sh
+git clone https://github.com/aolingge/yt-dual-subs.git
+```
 
-Every Google attempt has an 8 s deadline covering the headers and body, with one retry for a failed connection. Concurrent requests for identical source language, target and text share one request. A rate-limit answer (HTTP 429) is never retried by the worker; cue mode backs off for 20 s, then 60 s, then 3 minutes, keeps the original visible, and clears the wait on the first successful reply. YouTube original-track requests have an 8 s deadline and whole-track translations have a 5 s deadline; live Google backup can start earlier.
+Load the cloned folder using the same steps above. There is no build step or dependency installation. You can also [download the source ZIP](https://github.com/aolingge/yt-dual-subs/archive/refs/heads/main.zip).
 
-## Limitations
+</details>
 
-- Needs a real caption track. **Burned‑in** subtitles (baked into the video pixels) can't be hidden — use the control‑bar toggle to switch the overlay off for those videos.
-- The Google fallback uses an unofficial endpoint with no SLA; heavy use may be rate‑limited.
-- Depends on YouTube's current behaviour; a major YouTube change may require a selector update.
+## Choose how translations appear
 
-## Privacy
+**Want translations sooner?** Popup → **Translation → Engine → Fast display**.
 
-No analytics, no tracking, no accounts. Default mode prefers YouTube and uses Google if the translated track takes more than 1.5 s or is unavailable. Per-sentence mode uses Google; Fast display uses both immediately, including a bounded look-ahead of two sentences while YouTube loads. Native caption preview can send the displayed text to Google before the full track is available in any mode. Hover lookup sends only the hovered word to Google after about 0.4 seconds. The German Assistant dictionary receives the word only when its link is clicked; no new host permissions were added. Settings are stored in `chrome.storage.sync`. Saved sentences use `chrome.storage.local` and do not sync automatically; export a backup before uninstalling the extension.
+| Mode | What it does |
+| --- | --- |
+| **Whole-sentence** — default | Prefers YouTube's translated track. If it is still pending after 1.5 seconds, Google prepares the current and next two sentences. |
+| **Per-sentence** | Translates displayed sentences through Google. |
+| **Fast display** | Starts Google for the current and next two sentences while YouTube's translated track loads. |
 
-## Development
+The original is displayed as soon as available and does not wait for translation. While the full track loads, visible native captions can be displayed and translated first in **any mode**. Loaded captions follow the video's clock; late translation responses are checked against the current sentence. Network delays and provider rate limits still affect when a new translation arrives.
 
-Plain vanilla JS/CSS — no build step, no dependencies.
+Target languages include the built-in list and **Other language code…**, for example `nl`, `tr`, `uk`, or `pt-BR`. This is a multilingual extension; it is not limited to German.
 
-| File | Role |
-|---|---|
-| `inject.js` | MAIN‑world sniffer: captures the player's pot‑bearing timedtext URL, fetches cues + translation |
-| `content.js` | Overlay, cue engine, drag, control‑bar toggle, rendered‑scrape fallback |
-| `background.js` | Translation service worker (Google endpoint) |
-| `popup.html/.css/.js` | Settings UI with live preview |
-| `study.js` | Sentence browser, local saved-list and review UI |
-| `content.css` | Overlay styling + native‑caption suppression |
+## Small controls, useful shortcuts
 
-### Tests
+| Action | How |
+| --- | --- |
+| Show or hide the translated line | `Alt+Shift+Y` |
+| Repeat the current sentence; press again to stop | `Alt+Shift+S` |
+| Reveal translation in **On key** mode | `Alt+Shift+U` |
+| Move the subtitle box | Drag its top-left handle; double-click to reset position. |
+| Adjust box width | Drag either side grip, or use **Layout → Subtitle box width**. Double-click a grip to restore automatic width. |
+| Adjust timing | **Layout → Sync offset**, up to ±2 seconds. Exported SRT timing stays unchanged. |
+| Export captions | **Export subtitles**, choose original, translation, or bilingual. |
 
-`node --test` runs the source-level suite. Startup regressions cover an unanswered source request, original-first display, slow translation backup, responses between clock ticks, late sentence replies, failed early guesses, and request-body deadlines. The extension also needs an isolated browser check after loading an unpacked build because native caption DOM mutations and actual playback events cannot be fully simulated. Synthetic slow-network checks validate those interactions but do not guarantee every live YouTube video or translation server response time.
+Shortcuts can be reassigned at `edge://extensions/shortcuts` or `chrome://extensions/shortcuts`. Repeat speeds include **0.75×, 0.6×, and 0.5×**; the normal playback rate returns when repeating stops.
 
-`node tests/<name>.test.cjs` — no framework, no install. The suites run the real `content.js`, `inject.js`, and `background.js` inside `node:vm` against a fake YouTube page, popup, and extension API, so they assert the shipping source instead of a copy of it. `tests/context-invalidated.test.cjs` makes that fake extension API throw `Extension context invalidated` like a real reload does, so the crash reported on `content.js:25` cannot come back silently. `tests/study.test.cjs` drives repeat, slowed playback, the word box, the reveal modes, the pointer reveal and the sentence-stepping buttons; `tests/startup.test.cjs` covers the caption track seeded from the player's own track list, and that a stale guess never falls back to scraping.
+## Frequently asked questions
 
-## Credits
+<details>
+<summary><strong>Why are no subtitles appearing?</strong></summary>
 
-A clean‑room reimplementation inspired by the (closed‑source, discontinued) *YouTube™ Dual Subtitles* — built from scratch without using its code, with the overlap and word‑by‑word jitter problems solved at the source.
+Confirm that the video has a caption track in YouTube's **CC / Settings → Subtitles** menu. Enable the extension and captions, then refresh the page — especially after an extension update. Check the popup's status line for loading, fallback, or rate-limit messages. If there is no caption track, the extension cannot create one from audio.
 
-## License
+</details>
 
-[MIT](LICENSE).
+<details>
+<summary><strong>What if the original appears but the translation takes longer?</strong></summary>
+
+Try **Fast display**. It prepares upcoming sentences while the video plays. A slow or rate-limited translation service can still delay results; the original stays independent of that wait. Repeated requests for the same text can use cached translations.
+
+</details>
+
+<details>
+<summary><strong>Does it read subtitles burned into the video?</strong></summary>
+
+No. It uses YouTube's caption data or visible native-caption text. It does not perform OCR or speech recognition, and cannot remove captions embedded in the video pixels.
+
+</details>
+
+<details>
+<summary><strong>Does hover mean a word, or the whole translation line?</strong></summary>
+
+They are separate features. **Word lookup** queries the word under the pointer. **Translation → On hover** in Study settings reveals the translated subtitle when the pointer is inside the player; it hides when the pointer leaves the player or browser window. You can disable word lookup independently.
+
+</details>
+
+<details>
+<summary><strong>Why does bilingual SRT export sometimes stop?</strong></summary>
+
+Translated and bilingual export checks for missing or misaligned spoken lines. If the translation is incomplete, it reports the problem instead of silently exporting an incomplete file. Original-only export remains available when source cues are loaded.
+
+</details>
+
+## Privacy and your data
+
+- No extension analytics or tracking, and no extension account.
+- Translation sends caption text to YouTube or Google; hover lookup sends the hovered word to Google. The Google endpoint is unofficial and may be rate-limited.
+- German Assistant receives the word only when you click the dictionary link.
+- Settings use browser extension sync storage. **Saved sentences are local** and do not sync automatically; use **Export saved / Import saved** for backups and transfers. Uninstalling clears local extension data.
+
+Read the [full privacy and permission details](docs/PRIVACY.md).
+
+## Help improve it
+
+Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
+
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [v3.8.1 release notes](docs/releases/v3.8.1.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+
+## Credits and license
+
+Based on [Gythiro/yt-dual-subs](https://github.com/Gythiro/yt-dual-subs), with multilingual study tools, word lookup, responsive layouts, resizable subtitles, and startup/synchronization improvements added in this repository. The original copyright notice is preserved.
+
+Released under the [MIT License](LICENSE). This is an independent extension and is not affiliated with YouTube, Google, or German Assistant.

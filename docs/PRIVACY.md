@@ -1,0 +1,76 @@
+# Privacy and permissions / 隐私与权限
+
+[Back to the README](../README.md) · [中文](#中文)
+
+These details describe version **3.8.1**. This extension has no analytics, advertising code, extension account, or developer-operated translation server. YouTube, Google, your browser, and dictionary websites have their own data practices.
+
+## What leaves your browser
+
+| Feature | Destination | Data sent and when |
+| --- | --- | --- |
+| Caption loading | YouTube | Requests for the video's original and translated caption tracks. The extension uses the player's existing caption request. |
+| Whole-sentence translation | YouTube, with Google fallback | Prefers a translated YouTube track. If it is still pending after 1.5 seconds or unavailable, Google receives the current sentence and a look-ahead of up to two sentences. |
+| Per-sentence translation | Google Translate endpoint | Sentence text, source language when known, and chosen target language. |
+| Fast display | YouTube and Google | Starts both paths immediately; Google can receive the current sentence and next two sentences while the YouTube track loads. |
+| Native-caption preview | Google | In any translation mode, visible native-caption text can be sent before the full source track is ready. |
+| Hover word lookup | Google | The hovered word, source language when known, and target language after about 0.4 seconds of hovering. This feature can be switched off. |
+| German Assistant link | German Assistant (`godic.net`) | The word in the dictionary URL, only after you click the link. Hovering does not open the dictionary website. |
+
+Google translation uses `https://translate.googleapis.com/translate_a/single`, an **unofficial free endpoint**. It may be unavailable or rate-limited. No API key is requested or stored. External requests use the normal browser networking environment; providers can receive network metadata such as your IP address.
+
+## What is stored
+
+- **Preferences:** `chrome.storage.sync`, for language, styles, layout, and study settings. Whether preferences sync between devices depends on the browser's extension-sync settings.
+- **Saved sentences:** `chrome.storage.local`, under `studyCardsV1`. Cards contain the video ID/title, sentence timing and index, original text, available translation, source language, learned state, and save time. They do **not** sync automatically.
+- **Temporary caches:** caption and translation results can be kept in extension/page memory to reduce repeated requests. They are not sent to a project server.
+- **Exports:** SRT and saved-sentence JSON files are downloaded to the location your browser uses. You control whether those files are shared or synchronized elsewhere.
+
+**Back up saved sentences before uninstalling.** Use **Export saved / Import saved** in the popup. Import merges cards with the existing collection; resetting subtitle settings preserves saved cards. Uninstalling removes local extension storage.
+
+## Why the extension needs these permissions
+
+| Manifest entry | Purpose |
+| --- | --- |
+| `storage` | Save preferences and your local sentence collection. |
+| `https://translate.googleapis.com/*` | Let the service worker request sentence and word translations. |
+| Content scripts on `https://www.youtube.com/*` | Read caption data and native-caption text, follow playback timing, and draw the subtitle overlay. |
+
+The extension does not request access to all websites, browser history, cookies, or downloaded files. Its declared content scripts run on YouTube; the page-world script observes caption-related network activity to obtain the player's caption URL. Dictionary links open through ordinary browser navigation and require no added dictionary host permission.
+
+## Reporting a problem
+
+Only share the information needed to reproduce an issue. Public video links are useful, but do not upload cookies, tokens, browser profiles, private video links, or screenshots containing personal information. [Open an issue](https://github.com/aolingge/yt-dual-subs/issues).
+
+## 中文
+
+本说明对应 **3.8.1**。扩展没有统计、广告代码、扩展账号或开发者运营的翻译服务器。YouTube、Google、浏览器和词典网站仍有各自的数据处理规则。
+
+### 哪些内容会发送到外部
+
+- **字幕加载：**向 YouTube 请求视频原文字幕轨及译文轨，使用播放器已有的字幕请求。
+- **整句翻译：**优先使用 YouTube；译文等待超过 1.5 秒或不可用时，Google 可收到当前句及后两句。
+- **逐句翻译：**向 Google 发送字幕句子、已知的原文语言和目标语言。
+- **快速显示：**立即并行使用 YouTube 和 Google；等待整轨译文时，Google 可收到当前句及后两句。
+- **画面字幕预览：**完整原文轨尚未到达时，各模式都可能将播放器当前显示的原文发给 Google。
+- **悬停查词：**停留约 0.4 秒后，向 Google 发送当前单词、已知的原文语言和目标语言；可单独关闭。
+- **德语助手详查：**只有点击链接时，才通过词典网址向 `godic.net` 发送该词，悬停不会自动打开词典。
+
+Google 翻译使用 `translate.googleapis.com` 的**非官方免费端点**，可能不可用或被限流；扩展不要求或存储 API 密钥。网络请求通过浏览器正常发出，服务方可能收到 IP 地址等网络信息。
+
+### 本地与同步存储
+
+**设置**保存在 `chrome.storage.sync`，包括语言、样式、布局和学习设置，是否跨设备同步取决于浏览器的扩展同步设置。
+
+**收藏句子**保存在 `chrome.storage.local` 的 `studyCardsV1` 中，包含视频编号与标题、句子时间和序号、原文、可用译文、原文语言、掌握状态与收藏时间。收藏不会自动同步；字幕和翻译也可能使用临时内存缓存，减少重复请求。
+
+SRT 与收藏 JSON 下载到浏览器指定的位置，是否分享或通过其他工具同步由你决定。**卸载前请导出收藏备份。**导入会合并而不覆盖现有收藏；重置字幕设置不删除收藏，卸载则会清除扩展本地存储。
+
+### 权限用途
+
+- `storage`：保存设置和本地收藏。
+- `https://translate.googleapis.com/*`：由后台请求句子与单词翻译。
+- `https://www.youtube.com/*` 上的内容脚本：读取字幕、跟随播放时间、显示字幕框。页面主世界脚本观察字幕相关网络请求，以取得播放器的字幕地址。
+
+扩展不申请所有网站、浏览历史、Cookie 或下载文件权限。词典链接通过普通网页跳转打开，不额外申请词典站点权限。
+
+反馈问题时，请勿上传 Cookie、令牌、浏览器资料目录、私密视频链接或带个人信息的截图。[提交问题](https://github.com/aolingge/yt-dual-subs/issues)。
