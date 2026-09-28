@@ -100,6 +100,7 @@
   "fontMono": { "message": "等宽 Mono" },
   "fontCjk": { "message": "适合中文" },
   "sizeLabel": { "message": "字号" },
+  "sizeHint": { "message": "小窗口会自动缩小字幕并避开底部按钮；全屏按此字号排版，长句会适当缩小。" },
   "colText": { "message": "文字" },
   "colBg": { "message": "背景" },
   "colStroke": { "message": "描边" },

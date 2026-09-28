@@ -89,7 +89,8 @@ async function mountContent(options = {}) {
   const {
     cues = [], aligned = true, tcues = null, translationPending = false,
     backend = 'tlang', sourceLang = 'de', videoId = 'sample',
-    settings = {}, manifestVersion = MANIFEST_VERSION, i18nThrows = false, dead = false
+    settings = {}, manifestVersion = MANIFEST_VERSION, i18nThrows = false, dead = false,
+    playerWidth = 1280, playerHeight = 720, controlHeight = 0, overlayHeight = 0
   } = options;
 
   // Extension-context death (the extension was reloaded/updated while this page
@@ -104,6 +105,7 @@ async function mountContent(options = {}) {
   const timeouts = [];
   const requests = [];
   const outbound = [];
+  const resizeObservers = [];
   const storageWrites = [];
   const location = { href: `https://www.youtube.com/watch?v=${videoId}` };
   const time = clock();
@@ -111,18 +113,33 @@ async function mountContent(options = {}) {
   let nocuesSent = false;
 
   const video = { currentTime: 0.1, paused: false, playbackRate: 1 };
+  const geometry = { width: playerWidth, height: playerHeight };
   const player = element();
-  player.querySelector = (selector) => (selector === 'video' ? video : null);
+  const controls = element();
+  controls.getBoundingClientRect = () => ({
+    left: 0, top: geometry.height - controlHeight,
+    right: geometry.width, bottom: geometry.height,
+    width: geometry.width, height: controlHeight
+  });
+  player.querySelector = (selector) => selector === 'video' ? video :
+    selector === '.ytp-chrome-bottom' ? controls : null;
   // A full-viewport player rect, so "is the pointer on the player?" is testable
   // in windowed AND fullscreen layout (in fullscreen the rect IS the viewport).
   player.getBoundingClientRect = () => ({
-    left: 0, top: 0, right: 1280, bottom: 720, width: 1280, height: 720
+    left: 0, top: 0, right: geometry.width, bottom: geometry.height, ...geometry
   });
   const document = {
     hidden: false,
     documentElement: { classList: { toggle() {} } },
     body: element(),
-    createElement: element,
+    createElement() {
+      const el = element();
+      Object.defineProperties(el, {
+        offsetHeight: { get: () => el.id === 'ytds-overlay' ? overlayHeight : 0 },
+        offsetWidth: { get: () => el.id === 'ytds-overlay' ? Math.min(geometry.width * .92, 1100) : 0 }
+      });
+      return el;
+    },
     querySelector: (selector) => (selector === '#movie_player' ? player : null),
     querySelectorAll: (selector) => (selector === '.ytp-caption-segment' && nativeCaption
       ? [{ textContent: nativeCaption }] : [])
@@ -166,9 +183,15 @@ async function mountContent(options = {}) {
   class TestURL extends URL {}
   TestURL.createObjectURL = () => 'blob:test';
   TestURL.revokeObjectURL = () => {};
+  class TestResizeObserver {
+    constructor(callback) { this.callback = callback; this.targets = new Set(); resizeObservers.push(this); }
+    observe(target) { this.targets.add(target); }
+    disconnect() { this.targets.clear(); }
+  }
 
   vm.runInNewContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), {
     chrome, document, window, URL: TestURL, Blob, Date: time.Date, location,
+    ResizeObserver: TestResizeObserver,
     setTimeout(fn) { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {}
   });
@@ -209,7 +232,19 @@ async function mountContent(options = {}) {
   }
 
   const api = {
-    requests, outbound, storageWrites, timers, timeouts, video, player,
+    requests, outbound, storageWrites, timers, timeouts, video, player, resizeObservers,
+    resizePlayer(width, height) {
+      geometry.width = width; geometry.height = height;
+      for (const observer of resizeObservers) {
+        if (observer.targets.has(player)) observer.callback();
+      }
+      return api;
+    },
+    setFullscreen(value) {
+      document.fullscreenElement = value ? player : null;
+      api.fire('fullscreenchange');
+      return api;
+    },
     get cueLoopCount() { return timers.length; },
     read: overlayLines,
     tick,

@@ -229,6 +229,8 @@
   let wordSpans = null;         // karaoke spans of the original line, or null
   let wordTimes = null;         // parallel word start times (raw track ms)
   let activeWordIdx = -1;       // highlighted word index
+  let overlayResizeObserver = null;
+  let overlayLayoutFrame = 0;
   let wordPopup = null;
   let wordPopupWord = null;
   let wordPopupMeaning = null;
@@ -465,6 +467,11 @@
     buildHandle();                  // drag grip (its listeners die with overlay)
     player.appendChild(overlay);
     styleOverlay();
+    if (typeof ResizeObserver !== "undefined") {
+      overlayResizeObserver = new ResizeObserver(scheduleOverlayLayout);
+      overlayResizeObserver.observe(player);
+      overlayResizeObserver.observe(overlay);
+    }
     return overlay;
   }
 
@@ -578,7 +585,74 @@
     saveSettings({ posMode: "preset" });
   }
 
-  // Apply ONLY positioning (shared by styleOverlay + live drag feedback).
+  // Reserve the native controls even while they are faded out, so showing them
+  // does not move the subtitles or put selectable text on top of their buttons.
+  function playerBottomInset(player, rect) {
+    const controls = player.querySelector(".ytp-chrome-bottom");
+    const controlsRect = controls?.getBoundingClientRect?.();
+    const measured = controlsRect && controlsRect.height > 0 &&
+      controlsRect.top >= rect.top && controlsRect.top < rect.bottom
+      ? rect.bottom - controlsRect.top + 12 : 0;
+    return Math.min(rect.height * 0.35, Math.max(48, rect.height * 0.08, measured));
+  }
+
+  function scheduleOverlayLayout() {
+    if (!overlay || overlayLayoutFrame) return;
+    if (typeof window.requestAnimationFrame !== "function") {
+      layoutOverlay();
+      return;
+    }
+    overlayLayoutFrame = window.requestAnimationFrame(() => {
+      overlayLayoutFrame = 0;
+      layoutOverlay();
+    });
+  }
+
+  // Saved sizes describe the preferred full-player typography. Only rendered
+  // sizes change in a smaller player; storage and the popup sliders stay intact.
+  function layoutOverlay() {
+    if (!overlay || !origEl || !transEl) return;
+    const player = getPlayer();
+    const rect = player?.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) return;
+    const original = Math.max(1, Number(settings.origSize) || DEFAULTS.origSize);
+    const translated = Math.max(1, Number(settings.transSize) || DEFAULTS.transSize);
+    const largest = Math.max(settings.showOriginal ? original : 0,
+      settings.showTranslation ? translated : 0, 1);
+    const fullElement = document.fullscreenElement;
+    const fullscreen = fullElement === player || fullElement?.contains?.(player) ||
+      player.classList.contains("ytp-fullscreen");
+    const windowedCap = Math.max(10, Math.min(rect.width * 0.028, rect.height * 0.055));
+    let scale = fullscreen ? 1 : Math.min(1, windowedCap / largest);
+    const availableHeight = Math.max(24, rect.height - playerBottomInset(player, rect) - 28);
+    const budget = Math.min(availableHeight, rect.height * 0.45);
+    // Release any previous emergency scroll limit before measuring the new cue.
+    overlay.style.maxHeight = "";
+    overlay.style.overflowY = "";
+    const sizeLines = () => {
+      origEl.style.fontSize = Math.max(10, Math.round(original * scale * 10) / 10) + "px";
+      transEl.style.fontSize = Math.max(10, Math.round(translated * scale * 10) / 10) + "px";
+      overlay.style.gap = Math.round((Number(settings.rowGap) || 0) * scale * 10) / 10 + "px";
+    };
+    sizeLines();
+    // Wrapping is discontinuous: measure the actual lines after each reduction,
+    // rather than estimating a character count (important for CJK and Arabic).
+    for (let pass = 0; pass < 6 && overlay.offsetHeight > budget; pass++) {
+      if ((!settings.showOriginal || parseFloat(origEl.style.fontSize) <= 10) &&
+          (!settings.showTranslation || parseFloat(transEl.style.fontSize) <= 10)) break;
+      scale *= Math.min(0.9, budget / overlay.offsetHeight);
+      sizeLines();
+    }
+    // A pathological paragraph in a tiny miniplayer remains accessible by
+    // scrolling, without covering the control bar or clipping text away.
+    if (overlay.offsetHeight > availableHeight) {
+      overlay.style.maxHeight = availableHeight + "px";
+      overlay.style.overflowY = "auto";
+    }
+    applyPosition();
+  }
+
+  // Apply positioning after text wrapping, and also during live drag feedback.
   function applyPosition() {
     if (!overlay) return;
     if (settings.posMode === "custom") {
@@ -597,6 +671,29 @@
       overlay.style.transform = "";
       overlay.classList.remove("ytds-pos-bottom", "ytds-pos-center", "ytds-pos-top");
       overlay.classList.add("ytds-pos-" + settings.position);
+    }
+    const player = getPlayer();
+    const rect = player?.getBoundingClientRect?.();
+    if (!rect || !rect.width || !rect.height) return;
+    const edge = 14;
+    const height = overlay.offsetHeight || 0;
+    const width = overlay.offsetWidth || Math.min(rect.width * 0.92, 1100);
+    const bottom = rect.height - playerBottomInset(player, rect);
+    const clampY = (center) => Math.max(edge + height / 2,
+      Math.min(center, bottom - height / 2));
+    if (settings.posMode === "custom") {
+      const halfWidth = width / 2;
+      overlay.style.left = Math.max(halfWidth + 8,
+        Math.min(rect.width * clampPct(settings.posXpct) / 100,
+          rect.width - halfWidth - 8)) + "px";
+      overlay.style.top = clampY(rect.height * clampPct(settings.posYpct) / 100) + "px";
+    } else if (settings.position === "bottom") {
+      overlay.style.bottom = playerBottomInset(player, rect) + "px";
+    } else if (settings.position === "center") {
+      overlay.style.top = clampY(rect.height / 2) + "px";
+    } else {
+      overlay.style.top = Math.max(edge,
+        Math.min(rect.height * 0.08, bottom - height)) + "px";
     }
   }
 
@@ -637,6 +734,11 @@
 
   function removeOverlay() {
     destroyWordPopup();
+    if (overlayResizeObserver) { overlayResizeObserver.disconnect(); overlayResizeObserver = null; }
+    if (overlayLayoutFrame) {
+      window.cancelAnimationFrame?.(overlayLayoutFrame);
+      overlayLayoutFrame = 0;
+    }
     if (dragSaveTimer) { clearTimeout(dragSaveTimer); dragSaveTimer = null; }
     dragging = false;
     if (overlay) { overlay.remove(); overlay = null; } // removes handle + its listeners
@@ -666,6 +768,7 @@
     const oEmpty = !settings.showOriginal || !lineText(origEl);
     const tEmpty = !settings.showTranslation || !lineText(transEl);
     overlay.classList.toggle("ytds-empty", oEmpty && tEmpty);
+    scheduleOverlayLayout();
   }
 
   // ---- reveal modes (study: listen first, check the translation on demand) --
@@ -851,8 +954,9 @@
     const left = Math.min(Math.max(x - rect.left + 12, 8),
       Math.max(8, rect.width - width - 8));
     const below = y - rect.top + 16;
-    const top = below + height > rect.height - 8
-      ? Math.max(8, y - rect.top - height - 14) : below;
+    const bottom = rect.height - playerBottomInset(player, rect);
+    const top = below + height > bottom
+      ? Math.max(8, Math.min(y - rect.top - height - 14, bottom - height)) : below;
     popup.style.left = left + "px";
     popup.style.top = top + "px";
   }
@@ -2336,6 +2440,8 @@
   window.addEventListener("visibilitychange", onPlaybackJump, true);
   window.addEventListener("pointermove", onPointerMove, true);
   window.addEventListener("pointerout", onWindowPointerOut, true);
+  window.addEventListener("resize", scheduleOverlayLayout, true);
+  window.addEventListener("fullscreenchange", scheduleOverlayLayout, true);
 
   // ---- boot ----------------------------------------------------------------
   loadSettings().then(() => {

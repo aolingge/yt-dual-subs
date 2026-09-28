@@ -38,6 +38,7 @@ html.ytds-active .caption-window {
 
 .ytds-line {
   display: inline-block;
+  flex-shrink: 0;
   pointer-events: auto;
   user-select: text;
   -webkit-user-select: text;
