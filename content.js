@@ -6,8 +6,8 @@
 //       timedtext URL, fetches json3 cues (+ optional tlang translation aligned
 //       cue-for-cue), and posts them here. We drive an overlay off currentTime,
 //       switching PER-SENTENCE (no per-word jitter).
-//   (B) FALLBACK  — if no cues arrive (nocues), fall back to v1 rendered-scrape:
-//       poll .ytp-caption-segment every 200ms, debounce gtx translate.
+//   (B) NATIVE PREVIEW / FALLBACK — mirror rendered captions immediately while
+//       the track loads, then let the timestamp-driven cue mode take over.
 (() => {
   "use strict";
 
@@ -40,11 +40,13 @@
   // not initialized yet when this runs at load time).
   let extGone = false;
   function extAlive() {
-    if (extGone) return false;
-    try {
-      if (chrome.runtime && chrome.runtime.id) return true;
-    } catch (_e) { /* invalidated */ }
-    extGone = true;
+    if (!extGone) {
+      try {
+        if (chrome.runtime && chrome.runtime.id) return true;
+      } catch (_e) { /* invalidated */ }
+      extGone = true;
+    }
+    document.documentElement.classList.toggle("ytds-rendering", false);
     return false;
   }
 
@@ -205,9 +207,10 @@
   let cueEpoch = 0;          // bumped each (re)start/teardown; invalidates in-flight gtx
   const transCache = new Map(); // key `${videoId} ${idx}` -> translated text
   const transInflight = new Map(); // cue idx -> epoch of its in-flight gtx request
+  const transRetryAt = new Map(); // delay network-error retries, avoid a tick-rate burst
   const PREFETCH_AHEAD = 3;     // keep gtx bursts small; the active cue goes first
   const PREFETCH_AHEAD_PENDING = 2; // narrower window while tlang is still loading
-  const PENDING_PREFETCH_AFTER_MS = 3000; // ... and only after this long a wait
+  const PENDING_GOOGLE_AFTER_MS = 1500; // slow direct translations must not block forever
   const GTX_BACKOFF_MS = [20000, 60000, 180000]; // 429 cooldown ladder
   const MAX_GTX_INFLIGHT = 4;    // active requests bypass this prefetch-only cap
   const ZERO_DUR_FLOOR_MS = 1000; // min visible window for a trailing zero-dur cue
@@ -249,11 +252,14 @@
 
   // fallback (rendered-scrape) mode
   let pollTimer = null;
+  let nativeCaptionObserver = null;
+  let nativeCaptionPlayer = null;
+  let nativeSkipText = null; // static native text still left over during SPA navigation
   let debounceTimer = null;
   let lastSource = "";
   let lastTransSource = "";
   let lastReqToken = 0;
-  const DEBOUNCE_MS = 450;
+  const DEBOUNCE_MS = 120;
 
   // bookkeeping
   let currentVideoId = videoIdFromLocation();
@@ -351,6 +357,7 @@
     if (needRecue && settings.enabled) {
       transCache.clear();
       transInflight.clear();
+      transRetryAt.clear();
       fastPreviewIdx = -1;
       gtxCooldownUntil = 0;
       gtxBackoffStep = 0;
@@ -424,7 +431,7 @@
 
   // Read the currently displayed native caption text (fallback path).
   // Read ONLY .ytp-caption-segment (the combined node would duplicate text).
-  function readNativeCaption() {
+  function readNativeCaption(clean = true) {
     const segs = document.querySelectorAll(".ytp-caption-segment");
     if (!segs.length) return "";
     let parts = [];
@@ -432,7 +439,8 @@
       const t = s.textContent.trim();
       if (t) parts.push(t);
     });
-    return stripSoundDescriptions(parts.join(" "));
+    const text = parts.join(" ");
+    return clean ? stripSoundDescriptions(text) : text;
   }
 
   // ---- overlay -------------------------------------------------------------
@@ -863,6 +871,7 @@
   }
 
   function removeOverlay() {
+    document.documentElement.classList.toggle("ytds-rendering", false);
     destroyWordPopup();
     resizeGesture = null;
     resizeHandles = [];
@@ -900,7 +909,19 @@
     const oEmpty = !settings.showOriginal || !lineText(origEl);
     const tEmpty = !settings.showTranslation || !lineText(transEl);
     overlay.classList.toggle("ytds-empty", oEmpty && tEmpty);
+    updateNativeSuppression();
     scheduleOverlayLayout();
+  }
+
+  function updateNativeSuppression() {
+    // Keep native captions as a safety net until we can display their text.
+    // A loaded track owns its silent gaps too; recognized sound-only native
+    // captions must remain filtered instead of leaking through an empty box.
+    const hasText = (settings.showOriginal && !!lineText(origEl)) ||
+      (settings.showTranslation && !!lineText(transEl));
+    const ownsTrack = !!cueTimer || !!(pollTimer && readNativeCaption(false));
+    document.documentElement.classList.toggle("ytds-rendering",
+      settings.enabled && !extGone && (hasText || ownsTrack));
   }
 
   // ---- reveal modes (study: listen first, check the translation on demand) --
@@ -1308,14 +1329,14 @@
   let weEnabledCC = false;
 
   function ensureCaptionsOn(retries) {
-    if (!settings.enabled) return;
+    if (!settings.enabled || !settings.autoCaptions) return;
     const cc = document.querySelector(".ytp-subtitles-button");
-    if (!cc || cc.getAttribute("aria-pressed") === null) {
+    if (!cc || cc.getAttribute("aria-pressed") === null ||
+        cc.getAttribute("aria-disabled") === "true") {
       if (retries > 0) setTimeout(() => ensureCaptionsOn(retries - 1),
         retries > 10 ? 200 : 600);
       return;                                   // button / state not ready yet
     }
-    if (cc.getAttribute("aria-disabled") === "true") return;  // no captions on this video
     if (cc.getAttribute("aria-pressed") !== "true") {
       cc.click();
       weEnabledCC = true;
@@ -1384,7 +1405,7 @@
     setOriginal("");
     setTranslation("", "");
     applyRevealState();
-    cueTimer = setInterval(cueTick, 120);
+    cueTimer = setInterval(cueTick, 60);
     cueDirty = true;                  // one tick even if we start paused/hidden
     cueTick();                        // render the active cue NOW (no blank frame)
   }
@@ -1506,6 +1527,8 @@
     // the karaoke highlight moves while the same sentence stays on screen.
     repeatTick(idx, video, t);
     if (idx >= 0 && idx === activeCueIdx) {
+      if (translationPending && pendingGoogleAllowed()) gtxRequest(idx);
+      prefetchFrom(idx);                  // fill released slots even within one sentence
       if (wordSpans) highlightWord(wordIdxAt(t));
       return;                             // same sentence — no re-render, no jitter
     }
@@ -1534,16 +1557,15 @@
     const origText = cue.text;
 
     if (translationPending) {
-      // Fast mode races the already-supported Google endpoint against the
-      // whole-track YouTube translation for the active sentence only.
-      const cached = settings.backend === "fast"
-        ? transCache.get(cueVideoId + " " + idx) : undefined;
+      // Fast mode races Google immediately; whole-track mode starts its Google
+      // backup after a brief wait. Both only paint the sentence on screen.
+      const cached = transCache.get(cueVideoId + " " + idx);
       if (cached !== undefined) {
         setTranslation(cached, origText);
         fastPreviewIdx = idx;
       } else {
         setTranslation("", "");
-        if (settings.backend === "fast") gtxRequest(idx);
+        if (pendingGoogleAllowed()) gtxRequest(idx);
       }
       return;
     }
@@ -1596,10 +1618,16 @@
   // (on-demand) path and the look-ahead prefetch.
   function gtxBlocked() { return Date.now() < gtxCooldownUntil; }
 
+  function pendingGoogleAllowed() {
+    return !translationPending || settings.backend === "fast" ||
+      (!!pendingSince && Date.now() - pendingSince >= PENDING_GOOGLE_AFTER_MS);
+  }
+
   function gtxRequest(idx) {
     if (!displayCueList || gtxBlocked() || !extAlive()) return;
     const cue = displayCueList[idx];
     if (!cue || !cue.text) return;
+    if (Date.now() < (transRetryAt.get(idx) || 0)) return;
     const key = cueVideoId + " " + idx;
     if (transCache.has(key) || transInflight.has(idx)) return;
     const reqVid = cueVideoId;
@@ -1619,8 +1647,18 @@
         if (resp && resp.ok && resp.translated) {
           gtxCooldownUntil = 0;                     // endpoint healthy again
           gtxBackoffStep = 0;
+          transRetryAt.delete(idx);
           transCache.set(key, resp.translated);
-          if (activeCueIdx === idx &&
+          // A reply can land between clock ticks or immediately after a seek.
+          // Reconcile with the VIDEO clock before touching either visible line.
+          const video = getVideo();
+          const currentIdx = video ? activeCueIdxAt(video.currentTime * 1000 +
+            (Number(settings.offsetMs) || 0)) : -1;
+          if (currentIdx !== activeCueIdx) {
+            cueDirty = true;
+            cueTick();
+          }
+          if (currentIdx === idx && activeCueIdx === idx &&
               (translationPending || !hasDirectTranslation(idx))) {
             setTranslation(resp.translated, cue.text);
             if (translationPending) fastPreviewIdx = idx;
@@ -1634,6 +1672,8 @@
           gtxCooldownUntil = Date.now() + wait;
           console.warn("[YT Dual Subs] translation endpoint rate limited (" +
             resp.error + "); retrying in " + Math.round(wait / 1000) + "s");
+        } else {
+          transRetryAt.set(idx, Date.now() + 5000);
         }
         // Other failures leave the cache empty for a later attempt.
       }
@@ -1647,16 +1687,13 @@
   // moment a sentence appears — fixes the ~1s lag when tlang is unavailable.
   // Prefetch only groups without a complete direct translation. In particular,
   // a multi-fragment sentence cannot use just one misaligned tlang cue.
-  // Window-bounded to stay gentle on the unofficial endpoint. While YouTube's
-  // whole-track translation is still on its way, only the fast backend warms
-  // Google — and only after a wait long enough that an imminent tlang reply
-  // could not have made the burst pointless.
+  // Window-bounded to stay gentle on the endpoint. Fast mode warms two upcoming
+  // sentences immediately; whole-track mode does so after a 1.5s grace period.
   function prefetchFrom(startIdx) {
     if (!settings.enabled || !displayCueList || gtxBlocked()) return;
     let ahead = PREFETCH_AHEAD;
     if (translationPending) {
-      if (settings.backend !== "fast" || !pendingSince ||
-          Date.now() - pendingSince < PENDING_PREFETCH_AFTER_MS) return;
+      if (!pendingGoogleAllowed()) return;
       ahead = PREFETCH_AHEAD_PENDING;
     }
     const from = Math.max(0, startIdx);
@@ -1935,7 +1972,7 @@
     if (typeof data.nonce === "number" && data.nonce !== configNonce) return; // stale (nonce)
     const updateTranslation = !!data.translationUpdate && !!cueList &&
       cueVideoId === (data.videoId || currentVideoId);
-    const keepFastPreview = updateTranslation && settings.backend === "fast" &&
+    const keepFastPreview = updateTranslation &&
       translationPending && fastPreviewIdx === activeCueIdx &&
       !!transEl?.textContent;
     nocuesFallback = false;
@@ -1952,6 +1989,7 @@
     if (!updateTranslation) {
       transCache.clear();
       transInflight.clear();
+      transRetryAt.clear();
       fastPreviewIdx = -1;
       gtxCooldownUntil = 0;
       gtxBackoffStep = 0;
@@ -1977,8 +2015,15 @@
       const idx = video
         ? activeCueIdxAt(video.currentTime * 1000 + (Number(settings.offsetMs) || 0))
         : -1;
-      if (idx >= 0) {
-        activeCueIdx = idx;
+      if (idx !== activeCueIdx || idx < 0 ||
+          lineText(origEl) !== displayCueList[idx].text) {
+        // Do not advance activeCueIdx without repainting the original: that
+        // would permanently pair the preceding original with this translation.
+        activeCueIdx = -1;
+        cueDirty = true;
+        if (idx < 0) { setOriginal(""); setTranslation("", ""); }
+        cueTick();
+      } else {
         if (!(keepFastPreview && fastPreviewIdx === idx &&
               lineText(origEl) === displayCueList[idx].text)) {
           fastPreviewIdx = -1;
@@ -2007,6 +2052,7 @@
           if (!extAlive() || chrome.runtime.lastError) return;
           if (token !== lastReqToken) return;
           if (text !== lastSource) return;
+          if (readNativeCaption() !== text) { fallbackTick(); return; }
           if (resp && resp.ok && resp.translated) {
             setTranslation(resp.translated, text);
           }
@@ -2018,8 +2064,13 @@
   function fallbackTick() {
     if (!settings.enabled) return;
     if (!extAlive()) { stopFallback(); return; }  // extension reloaded; stop quietly
+    watchNativeCaptions();
+    if (nativeSkipText !== null) {
+      if (readNativeCaption(false) === nativeSkipText) { updateNativeSuppression(); return; }
+      nativeSkipText = null;
+    }
     const text = readNativeCaption();
-    if (text === lastSource) return;
+    if (text === lastSource) { updateNativeSuppression(); return; }
     lastSource = text;
     lastReqToken++;                  // an earlier source's reply must not repaint
     setTranslation("", "");
@@ -2037,10 +2088,37 @@
   function startFallback() {
     if (pollTimer) return;
     ensureOverlay();
-    pollTimer = setInterval(fallbackTick, 200);
+    pollTimer = setInterval(fallbackTick, 120);
+    fallbackTick();                       // do not wait for a timer or watchdog
+  }
+
+  function watchNativeCaptions() {
+    const player = getPlayer();
+    if (player === nativeCaptionPlayer || typeof MutationObserver === "undefined") return;
+    if (nativeCaptionObserver) nativeCaptionObserver.disconnect();
+    nativeCaptionPlayer = player;
+    if (!player) return;
+    const selector = ".ytp-caption-window-container, .caption-window, .ytp-caption-segment";
+    const containsCaption = (node, nested = false) => {
+      const el = node && (node.nodeType === 3 ? node.parentElement : node);
+      return !!(el && (el.closest?.(selector) || (nested && el.querySelector?.(selector))));
+    };
+    nativeCaptionObserver = new MutationObserver((records) => {
+      if (!pollTimer) return;
+      // Ignore our own overlay writes; otherwise observing the player recurses.
+      if (records.some((r) => containsCaption(r.target) ||
+          [...r.addedNodes, ...r.removedNodes].some((n) => containsCaption(n, true)))) {
+        nativeSkipText = null; // fresh native DOM can contain the same words on the new video
+        fallbackTick();
+      }
+    });
+    nativeCaptionObserver.observe(player, { subtree: true, childList: true, characterData: true });
   }
 
   function stopFallback() {
+    if (nativeCaptionObserver) { nativeCaptionObserver.disconnect(); nativeCaptionObserver = null; }
+    nativeCaptionPlayer = null;
+    nativeSkipText = null;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
     lastSource = "";
@@ -2057,6 +2135,7 @@
     if (wasCueMode) {
       cueEpoch++;
       transInflight.clear();
+      transRetryAt.clear();
       setOriginal("");
       setTranslation("", "");
     }
@@ -2524,6 +2603,7 @@
     nocuesFallback = false;
     clearHoverReveal();
     transInflight.clear();
+    transRetryAt.clear();
     cueEpoch++;                       // invalidate any in-flight gtx callbacks
   }
 
@@ -2533,15 +2613,15 @@
     if (!settings.enabled) {
       teardownAll();
     } else {
-      // ensure overlay exists; cue mode will fill it once cues arrive,
-      // fallback fills it if we end up scraping.
+      // Native captions bridge startup immediately; cue mode takes over once ready.
       ensureOverlay();
-      if (nocuesFallback) startFallback();
+      if (!cueTimer) startFallback();
       if (requestCues) sendConfig();
     }
   }
 
   function onNav() {
+    const staleNative = videoIdFromLocation() !== currentVideoId ? readNativeCaption(false) : "";
     currentVideoId = videoIdFromLocation();
     transCache.clear();
     weEnabledCC = false;        // fresh video — re-evaluate caption state
@@ -2550,6 +2630,10 @@
     if (settings.enabled) {
       ensureOverlay();
       restoreCachedCues();      // already watched: paint immediately, then refresh
+      if (!cueTimer) {
+        nativeSkipText = staleNative || null;
+        startFallback();
+      }
       sendConfig();             // ask inject.js for cues on the new video
       syncCaptions();           // auto-turn on YouTube CC so subs actually show
     }
@@ -2562,12 +2646,16 @@
   function onPlaybackJump() {
     cueDirty = true;
     cueTick();
+    if (pollTimer) fallbackTick();
   }
 
   // single listener instances (added once; never accumulate)
   window.addEventListener("yt-navigate-finish", onNav, true);
   window.addEventListener("message", onInjectMessage, false);
   window.addEventListener("seeked", onPlaybackJump, true);
+  window.addEventListener("seeking", onPlaybackJump, true);
+  window.addEventListener("play", onPlaybackJump, true);
+  window.addEventListener("playing", onPlaybackJump, true);
   window.addEventListener("loadedmetadata", onPlaybackJump, true);
   window.addEventListener("visibilitychange", onPlaybackJump, true);
   window.addEventListener("pointermove", onPointerMove, true);

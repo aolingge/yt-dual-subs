@@ -152,7 +152,7 @@ test('fast display shows the current Google sentence first and keeps it when You
     { start: 1000, dur: 1000, text: 'Next.' }
   ];
   const player = await mountCues(cues, null, null, true, 'fast');
-  assert.equal(player.requests.length, 1);
+  assert.equal(player.requests.length, 2, 'also prepare the upcoming sentence');
   assert.equal(player.requests[0].message.text, 'Hello.');
   player.requests[0].done({ ok: true, translated: '先到的译文。' });
   assert.deepEqual(player.at(0.1), {
@@ -198,7 +198,7 @@ test('Google rate limiting stops fast requests for later sentences on the same v
   const player = await mountCues(cues, null, null, true, 'fast');
   player.requests[0].done({ ok: false, error: 'Error: translate http 429' });
   assert.equal(player.at(1.1).translation, '');
-  assert.equal(player.requests.length, 1);
+  assert.equal(player.requests.length, 2, 'the existing prefetch is not followed by new requests');
   player.updateTranslation([
     { ...cues[0], trans: '第一句。' },
     { ...cues[1], trans: '第二句。' }

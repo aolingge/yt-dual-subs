@@ -39,6 +39,7 @@ async function loadContent(saved) {
   const document = {
     documentElement: { classList: { toggle() {} } },
     createElement: element,
+    querySelectorAll() { return []; },
     querySelector(selector) { return selector === '#movie_player' ? player : null; }
   };
   const context = {

@@ -4,6 +4,7 @@
 
 const CACHE = new Map();          // key: `${sl}\u0000${tl}\u0000${text}` -> translated string
 const CACHE_MAX = 2000;           // simple LRU-ish cap
+const INFLIGHT = new Map();      // native preview and cue mode may ask for the same sentence
 
 function cacheGet(key) {
   if (!CACHE.has(key)) return undefined;
@@ -36,7 +37,10 @@ async function fetchOnce(url) {
   const timer = controller
     ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
   try {
-    return await fetch(url, { method: "GET", signal: controller ? controller.signal : undefined });
+    const res = await fetch(url, { method: "GET", signal: controller ? controller.signal : undefined });
+    // The deadline also covers the body. Headers alone do not free a slot.
+    const data = res.ok ? await res.json() : null;
+    return { res, data };
   } finally {
     if (timer !== null) clearTimeout(timer);
   }
@@ -50,6 +54,7 @@ async function translate(text, targetLang, sourceLang) {
   const key = `${sl}\u0000${targetLang}\u0000${text}`;
   const cached = cacheGet(key);
   if (cached !== undefined) return cached;
+  if (INFLIGHT.has(key)) return INFLIGHT.get(key);
 
   const url =
     "https://translate.googleapis.com/translate_a/single" +
@@ -57,25 +62,29 @@ async function translate(text, targetLang, sourceLang) {
     "&tl=" + encodeURIComponent(targetLang) +
     "&dt=t&q=" + encodeURIComponent(text);
 
-  let res;
-  try {
-    res = await fetchOnce(url);
-  } catch (err) {
-    // Timeout or network failure: try exactly once more, then give up.
-    res = await fetchOnce(url);
-  }
-  if (!res.ok) throw new Error("translate http " + res.status);
-  const data = await res.json();
-
-  let out = "";
-  if (Array.isArray(data) && Array.isArray(data[0])) {
-    for (const seg of data[0]) {
-      if (seg && typeof seg[0] === "string") out += seg[0];
+  const request = (async () => {
+    let answer;
+    try {
+      answer = await fetchOnce(url);
+    } catch (err) {
+      // Timeout or network failure: try exactly once more, then give up.
+      answer = await fetchOnce(url);
     }
-  }
-  out = out.trim();
-  if (out) cacheSet(key, out);
-  return out;
+    const { res, data } = answer;
+    if (!res.ok) throw new Error("translate http " + res.status);
+    let out = "";
+    if (Array.isArray(data) && Array.isArray(data[0])) {
+      for (const seg of data[0]) {
+        if (seg && typeof seg[0] === "string") out += seg[0];
+      }
+    }
+    out = out.trim();
+    if (out) cacheSet(key, out);
+    return out;
+  })();
+  INFLIGHT.set(key, request);
+  try { return await request; }
+  finally { if (INFLIGHT.get(key) === request) INFLIGHT.delete(key); }
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

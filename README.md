@@ -13,14 +13,14 @@ A clean‑room, open‑source **Manifest V3** extension. It reads the video's re
 - **Dual subtitles, one layer.** Original and translation each have their own area and wrap onto multiple lines when needed. YouTube's own caption layer is hidden, so the two never overlap.
 - **Per‑sentence, no jitter.** Adjacent timed caption cues are joined into readable sentences and shown from the sentence start. Long pauses and excessively long unpunctuated text are split safely; screen-caption fallback cannot look ahead.
 - **Sound cues hidden.** Common bracketed labels such as `[musik]` and `[音乐]` are removed from the on-screen subtitles while spoken text and ordinary brackets stay intact. SRT exports retain the original cues.
-- **Two translation engines, three modes.** YouTube whole-track translation is the default; per-sentence mode uses Google's free endpoint; optional Fast display translates the current sentence through Google while YouTube loads.
+- **Two translation engines, three modes.** YouTube whole-track translation is the default, with a Google backup after a 1.5 s wait; per-sentence mode uses Google's free endpoint; Fast display immediately prepares the current and next two sentences through Google while YouTube loads.
 - **Fully customizable.** Per‑line font, size, text colour, background colour + opacity, outline, line spacing, and which line sits on top. Live preview in the popup.
 - **Draggable.** Grab the handle and drop the subtitle box anywhere on the video; it persists, double‑click to reset. Works in fullscreen.
 - **One‑click toggle.** A button in the player's control bar turns the whole thing on/off (and YouTube's CC with it) — handy for videos with burned‑in subtitles.
 - **Export to SRT.** Download the current video's subtitles as a standard `.srt` file — original, translation, or bilingual — straight from the popup.
 - **Robust.** Survives SPA navigation, falls back to reading the on‑screen caption text if the cue fetch ever fails, and turns YouTube captions on for you automatically.
 
-- **Survives an extension reload.** Reloading or updating the extension while a YouTube tab stays open no longer raises `Extension context invalidated` in the errors panel: the older script notices its context is dead, stops its loops and listeners quietly, and keeps rendering with built-in labels. Refresh the tab to pick up the new version.
+- **Survives an extension reload.** The older script detects its dead extension context, stops quietly and restores YouTube's native caption visibility. Refresh the tab to pick up the new extension version.
 - **Already watched? Instant.** The cues of videos you opened in this session are kept in memory, so going back to one paints its subtitles immediately while the page refreshes them in the background.
 - **Subtitle sync nudge.** If the lines sit slightly early or late against the audio, the popup's sync slider shifts them by up to ±2 s. Exported SRT timing is left untouched.
 - **Live status line.** The popup reports what the current tab is doing: waiting for YouTube, reading Google, how many sentences are loaded, whether the free endpoint is cooling down after a rate limit, and which version is loaded.
@@ -28,7 +28,8 @@ A clean‑room, open‑source **Manifest V3** extension. It reads the video's re
 - **Study mode: repeat & slow down.** Replay the sentence on screen 2, 3 or 5 times, or loop it, at 0.75× / 0.6× / 0.5×; the normal rate comes back when the repeat stops. `Alt+Shift+S` repeats the current sentence at any time.
 - **The word being spoken is boxed, not popped.** The sentence is always shown in full and the word currently being spoken gets a soft background box behind it, so the line stays readable while you follow the audio. Word timings only exist on auto-generated tracks; author-written captions show whole sentences.
 - **Listen first, then check.** The translation line can be *always* visible, revealed on *hover* over the player, or shown only when you ask for it with `Alt+Shift+U`.
-- **Starts sooner.** The caption track is seeded from the player's own track list before the player asks for it, so the first sentence can appear earlier. A guess that turns out stale is dropped silently and the normal capture path takes over.
+- **Starts sooner.** Native caption text is mirrored immediately while the full track loads; caption DOM changes repaint directly, with a 120 ms polling backup. The original track and translation load in parallel. A stale guessed URL is dropped without replacing a newer player capture. Both fetches have deadlines, including response bodies, so a hung request cannot leave the startup path stuck.
+- **Keeps both lines synchronized.** Cue rendering follows the video clock every 60 ms and immediately after play or seek events. Translation callbacks check that clock again before painting; an overdue translation can never replace the sentence currently playing. Upcoming sentences are prefetched so their translations can already be ready when their originals appear.
 - **Everything in the popup.** The popup's *Current video* card repeats the sentence on screen, shows or hides the translation, and steps to the previous or next sentence — the same actions as the shortcuts, without leaving the popup. It lists the keys the browser actually assigned and opens the shortcut page in one click.
 - **You keep the caption switch.** *Turn YouTube captions on for me* can be turned off, and then the extension never touches the player's own CC button: you pick the track, the overlay still draws on top of it.
 - **Hover reveal works in fullscreen.** The reveal follows where the pointer actually is instead of a `:hover` selector, which is permanently true once the player fills the screen.
@@ -45,7 +46,7 @@ YouTube serves caption tracks from an `/api/timedtext` endpoint that now require
 1. A MAIN‑world script (`inject.js`) passively watches the page (XHR, `fetch`, and Resource Timing) and captures the **player's own** timedtext request, which already carries a valid `pot`.
 2. It re‑fetches that exact URL as `json3` for the original cues, and again with `&tlang=` for YouTube's translation — aligned cue‑for‑cue. Pairing is also timestamp‑checked: a fragment whose start is off by more than ~1.2 s is rejected, and that sentence is translated as a whole instead, so a plausible‑looking line can never land beside the wrong original.
 3. `content.js` groups adjacent cues for display, then drives the overlay off `video.currentTime`. Raw cues remain available for SRT export.
-4. If the cue fetch ever fails, it falls back to reading the on‑screen caption text directly.
+4. While waiting for a track, it reads on-screen captions immediately; this path also remains available if the cue fetch fails. Native text is hidden only once the extension can replace it or has a loaded track owning the current caption gap.
 
 ## Install (load unpacked)
 
@@ -91,9 +92,9 @@ Per‑sentence translation tells Google the caption track's language explicitly 
 
 The original caption track is not restricted to German: English, Spanish, Japanese, Arabic, and other tracks use the same caption and translation path. Custom target codes let you try more languages, but a video needs captions and translation availability depends on YouTube or Google; no extension can guarantee every language on every video.
 
-**Fast display** (optional): sends the current sentence to Google while waiting for YouTube's whole-track translation. Once the YouTube track arrives, later sentences use it; the already-visible sentence is not rewritten. Google rate limits or errors leave the extension waiting for YouTube. This mode sends the current sentence to Google even when YouTube translation eventually succeeds.
+**Fast display**: immediately sends the current sentence and next two sentences to Google while YouTube's whole-track translation loads. Whole-sentence mode gives YouTube a 1.5 s head start before starting that backup. Once the YouTube track arrives, later sentences use it; a Google translation already visible on the current sentence is kept to avoid flicker. Native caption preview can translate through Google before the full source track arrives. This makes the original independent of translation latency; network speed still controls how soon a new translation is available.
 
-Every Google request is timeout-guarded: an attempt that never answers is aborted after 8 s and retried once — a hung request would otherwise occupy one of the few in-flight slots forever. A rate-limit answer (HTTP 429) is never retried; the extension backs off for 20 s, then 60 s, then 3 minutes, keeps showing whatever YouTube provides in the meantime, and clears the wait on the first successful reply.
+Every Google attempt has an 8 s deadline covering the headers and body, with one retry for a failed connection. Concurrent requests for identical source language, target and text share one request. A rate-limit answer (HTTP 429) is never retried by the worker; cue mode backs off for 20 s, then 60 s, then 3 minutes, keeps the original visible, and clears the wait on the first successful reply. YouTube original-track requests have an 8 s deadline and whole-track translations have a 5 s deadline; live Google backup can start earlier.
 
 ## Limitations
 
@@ -103,7 +104,7 @@ Every Google request is timeout-guarded: an attempt that never answers is aborte
 
 ## Privacy
 
-No analytics, no tracking, no accounts. Default mode prefers YouTube and falls back to Google when translation is unavailable; per-sentence mode uses Google; Fast display uses both, sending the current sentence to Google while waiting. When hover lookup is enabled, only the hovered word is sent to Google after about 0.4 seconds. The German Assistant dictionary receives the word only when its link is clicked; no new host permissions were added. Settings are stored in `chrome.storage.sync`. Saved sentences use `chrome.storage.local` and do not sync automatically; export a backup before uninstalling the extension.
+No analytics, no tracking, no accounts. Default mode prefers YouTube and uses Google if the translated track takes more than 1.5 s or is unavailable. Per-sentence mode uses Google; Fast display uses both immediately, including a bounded look-ahead of two sentences while YouTube loads. Native caption preview can send the displayed text to Google before the full track is available in any mode. Hover lookup sends only the hovered word to Google after about 0.4 seconds. The German Assistant dictionary receives the word only when its link is clicked; no new host permissions were added. Settings are stored in `chrome.storage.sync`. Saved sentences use `chrome.storage.local` and do not sync automatically; export a backup before uninstalling the extension.
 
 ## Development
 
@@ -120,7 +121,7 @@ Plain vanilla JS/CSS — no build step, no dependencies.
 
 ### Tests
 
-`node --test` runs the source-level suite, including hover lookup delay, cache reuse, and stale-response handling. The extension also needs a browser check after loading an unpacked build because YouTube controls and pointer behavior cannot be fully simulated.
+`node --test` runs the source-level suite. Startup regressions cover an unanswered source request, original-first display, slow translation backup, responses between clock ticks, late sentence replies, failed early guesses, and request-body deadlines. The extension also needs an isolated browser check after loading an unpacked build because native caption DOM mutations and actual playback events cannot be fully simulated. Synthetic slow-network checks validate those interactions but do not guarantee every live YouTube video or translation server response time.
 
 `node tests/<name>.test.cjs` — no framework, no install. The suites run the real `content.js`, `inject.js`, and `background.js` inside `node:vm` against a fake YouTube page, popup, and extension API, so they assert the shipping source instead of a copy of it. `tests/context-invalidated.test.cjs` makes that fake extension API throw `Extension context invalidated` like a real reload does, so the crash reported on `content.js:25` cannot come back silently. `tests/study.test.cjs` drives repeat, slowed playback, the word box, the reveal modes, the pointer reveal and the sentence-stepping buttons; `tests/startup.test.cjs` covers the caption track seeded from the player's own track list, and that a stale guess never falls back to scraping.
 

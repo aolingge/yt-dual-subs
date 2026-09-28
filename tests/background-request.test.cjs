@@ -105,3 +105,35 @@ test('a hung request is aborted at its deadline, retried once, then gives up', a
   assert.match(reply.error, /aborted/);
   assert.equal(started.length, 2, 'and then it stops trying');
 });
+
+test('the Google deadline covers a hung response body as well as the headers', async () => {
+  const fetch = async (_url, { signal }) => ({ ok: true,
+    json: () => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('body aborted')));
+    }) });
+  const p = mountBackground(fetch, { withTimers: true });
+  const pending = p.request('Hallo.');
+  await tick();
+  assert.equal(p.timers[0].cleared, false);
+  p.timers[0].fn();
+  await tick();
+  p.timers[1].fn();
+  const reply = await pending;
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /body aborted/);
+});
+
+test('simultaneous translations of the same sentence share a single network request', async () => {
+  let finish;
+  let count = 0;
+  const p = mountBackground(() => { count++; return new Promise(resolve => { finish = resolve; }); });
+  const first = p.request('Hallo.');
+  const second = p.request('Hallo.');
+  assert.equal(count, 1);
+  finish({ ok: true, json: async () => [[['你好。']]] });
+  const replies = await Promise.all([first, second]);
+  assert.equal(replies[0].translated, '你好。');
+  assert.equal(replies[1].translated, '你好。');
+  await p.request('Hallo.');
+  assert.equal(count, 1, 'the completed response is cached');
+});

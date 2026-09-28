@@ -12,6 +12,13 @@
   window.__ytdsInjected = true;
 
   const TIMEDTEXT_MARK = "/api/timedtext";
+  // Use the unhooked page fetch for our requests. Otherwise a speculative
+  // request is mistaken for the player's capture and can recurse or fail over.
+  const pageFetch = window.fetch.bind(window);
+  const extensionFetchUrls = new Set();
+  const ORIGINAL_TIMEOUT_MS = 8000;
+  const TRANSLATION_TIMEOUT_MS = 5000;
+  let produceSeq = 0;
 
   // Most recently seen timedtext URL of any kind.
   let lastTimedtextUrl = "";
@@ -159,12 +166,27 @@
   }
 
   // page-context fetch — same-origin youtube.com so pot/signature stay valid.
-  async function fetchJson3(url) {
-    const res = await fetch(url, { method: "GET", credentials: "include" });
-    if (!res.ok) throw new Error("timedtext http " + res.status);
-    const txt = await res.text();
-    if (!txt) throw new Error("timedtext empty body");
-    return JSON.parse(txt);
+  async function fetchJson3(url, timeoutMs = ORIGINAL_TIMEOUT_MS) {
+    extensionFetchUrls.add(url);
+    if (extensionFetchUrls.size > 50) extensionFetchUrls.delete(extensionFetchUrls.values().next().value);
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    let timer;
+    const deadline = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => {
+        controller?.abort();
+        reject(new Error("timedtext timeout"));
+      }, timeoutMs);
+    });
+    const request = (async () => {
+      const res = await pageFetch(url, { method: "GET", credentials: "include",
+        signal: controller ? controller.signal : undefined });
+      if (!res.ok) throw new Error("timedtext http " + res.status);
+      const txt = await res.text();
+      if (!txt) throw new Error("timedtext empty body");
+      return JSON.parse(txt);
+    })();
+    try { return await Promise.race([request, deadline]); }
+    finally { clearTimeout(timer); }
   }
 
   // ---- bridge to content.js ------------------------------------------------
@@ -190,11 +212,16 @@
     if (sourceVid !== currentVideoId) return;
     if (!force && producedForUrl === sourceUrl) return;
     producedForUrl = sourceUrl;
+    const run = ++produceSeq;
     clearNocuesTimer();
 
     const vid = currentVideoId;
     const trackKey = sourceKey;
     const sourceLang = langOfUrl(sourceUrl);
+    const baseUrl = sourceUrl;
+    const speculative = sourceSpeculative;
+    const isCurrent = () => run === produceSeq && vid === currentVideoId &&
+      sourceVid === currentVideoId && trackKey === sourceKey && myNonce === reqNonce;
     // Capture the nonce NOW, at produce start. post() must stamp the reply with
     // THIS nonce, not the live global reqNonce at send-time: otherwise two
     // produces running concurrently (e.g. boot + yt-navigate-finish both send
@@ -206,19 +233,18 @@
       // original can be rendered as soon as it arrives; it need not wait for
       // YouTube to finish translating the whole track.
       const translationPromise = cfg.useTlang
-        ? fetchJson3(buildUrl(sourceUrl, mapTlang(cfg.targetLang)))
+        ? fetchJson3(buildUrl(baseUrl, mapTlang(cfg.targetLang)), TRANSLATION_TIMEOUT_MS)
             .then(parseJson3, () => null)
         : null;
-      const origJson = await fetchJson3(buildUrl(sourceUrl, null));
+      const origJson = await fetchJson3(buildUrl(baseUrl, null));
       const cues = parseJson3(origJson);
 
       // ignore if we navigated away mid-fetch (or the source no longer matches)
-      if (vid !== currentVideoId || sourceVid !== currentVideoId ||
-          trackKey !== sourceKey || myNonce !== reqNonce) return;
+      if (!isCurrent()) return;
 
       if (!cues.length) {
         producedForUrl = "";        // allow a retry if the track later yields cues
-        if (sourceSpeculative) {
+        if (speculative) {
           // Our guess was stale/unsigned. Drop it quietly and wait for the
           // player's own capture: posting "nocues" here would wrongly switch
           // content.js to scrape mode.
@@ -226,6 +252,7 @@
           sourceVid = "";
           sourceKey = "";
           sourceSpeculative = false;
+          armNocuesTimer();
           return;
         }
         post("nocues", { nonce: myNonce });
@@ -238,8 +265,7 @@
       }
 
       const tcues = translationPromise ? await translationPromise : null;
-      if (vid !== currentVideoId || sourceVid !== currentVideoId ||
-          trackKey !== sourceKey || myNonce !== reqNonce) return;
+      if (!isCurrent()) return;
 
       // Pair by event order before sorting, but reject outliers with a very
       // different timestamp. Equal event counts alone do not prove alignment.
@@ -257,14 +283,14 @@
     } catch (_e) {
       // could not fetch/parse — let content.js fall back to scraping, but only
       // if we are still on the same video the fetch was started for.
-      if (vid !== currentVideoId || sourceVid !== currentVideoId ||
-          trackKey !== sourceKey || myNonce !== reqNonce) return;
+      if (!isCurrent()) return;
       producedForUrl = "";          // allow a retry on next capture
-      if (sourceSpeculative) {
+      if (speculative) {
         sourceUrl = "";
         sourceVid = "";
         sourceKey = "";
         sourceSpeculative = false;
+        armNocuesTimer();
         return;                     // the real capture will arrive shortly
       }
       post("nocues", { nonce: myNonce });
@@ -413,9 +439,9 @@
         return;
       }
     } catch (_e) { /* never throw */ }
-    if (n >= 6) return;             // ~3s, then leave it to the sniffer
+    if (n >= 6) return;             // ~1.2s, then leave it to the sniffer
     if (seedTimer) clearTimeout(seedTimer);
-    seedTimer = setTimeout(() => seedSourceSoon(n + 1), 500);
+    seedTimer = setTimeout(() => seedSourceSoon(n + 1), 200);
   }
 
   // Record a timedtext URL seen on the wire (or a URL we guessed ourselves).
@@ -441,7 +467,7 @@
       sourceUrl = url;
       sourceVid = vidOfUrl(url);
       sourceSpeculative = false;
-      if (wasSpeculative || key !== sourceKey) {
+      if (wasSpeculative || key !== sourceKey || !producedForUrl) {
         sourceKey = key;
         onSourceCaptured();
       }
@@ -461,6 +487,7 @@
         sourceKey = "";
         sourceSpeculative = false;
         producedForUrl = "";
+        produceSeq++;
         if (seedTimer) { clearTimeout(seedTimer); seedTimer = null; }
         clearNocuesTimer();
         return true;
@@ -569,7 +596,8 @@
   try {
     const scan = (entries) => {
       for (const e of entries) {
-        if (e && typeof e.name === "string" && isTimedtext(e.name)) {
+        if (e && typeof e.name === "string" && isTimedtext(e.name) &&
+            !extensionFetchUrls.has(e.name)) {
           noteTimedtext(e.name);
         }
       }

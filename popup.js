@@ -268,8 +268,8 @@ function statusText(s) {
   if (!s.enabled) return t("statusOff", "扩展已关闭，字幕不会显示。");
   const parts = [];
   if (s.mode === "cues") parts.push(t("statusCues", "字幕源：YouTube 字幕轨"));
-  else if (s.mode === "scrape") parts.push(t("statusScrape", "字幕源：画面字幕（无可用字幕轨）"));
-  else parts.push(t("statusIdle", "还没收到字幕，播放几秒后会自动加载"));
+  else if (s.mode === "scrape") parts.push(t("statusScrape", "字幕源：画面字幕（即时显示／字幕轨加载中）"));
+  else parts.push(t("statusIdle", "等待视频提供字幕；请检查 YouTube 的 CC 开关和字幕轨"));
   if (s.cueCount) parts.push(s.cueCount + " " + t("statusLines", "句"));
   if (s.mode === "cues") {
     const lang = String(s.sourceLang || "auto");

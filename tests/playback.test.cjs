@@ -110,7 +110,7 @@ test('a cached video whose target language changed keeps the original but drops 
   assert.equal(player.status().pending, true, 'the new language is still on its way');
 });
 
-test('while YouTube translation is pending, only fast display warms Google ahead', async () => {
+test('fast display warms upcoming translations immediately while whole-track mode gives YouTube a head start', async () => {
   const cues = [0, 1, 2, 3, 4].map((i) => ({ start: i * 1000, dur: 1000, text: `Satz ${i}.` }));
 
   const patient = await mountContent({
@@ -122,7 +122,7 @@ test('while YouTube translation is pending, only fast display warms Google ahead
   const fast = await mountContent({
     cues, aligned: null, translationPending: true, backend: 'fast'
   });
-  assert.equal(fast.requests.length, 1, 'only the sentence on screen');
+  assert.equal(fast.requests.length, 3, 'the current sentence and two upcoming sentences');
 
   fast.advance(3500);
   fast.at(1.1);

@@ -2,8 +2,8 @@
 
 /* When the extension is active, visually hide YouTube's own caption layer.
    We keep it in the DOM (display stays) so we can still read its text. */
-html.ytds-active .ytp-caption-window-container,
-html.ytds-active .caption-window {
+html.ytds-active.ytds-rendering .ytp-caption-window-container,
+html.ytds-active.ytds-rendering .caption-window {
   opacity: 0 !important;
   pointer-events: none !important;
 }

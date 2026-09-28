@@ -90,7 +90,8 @@ async function mountContent(options = {}) {
     cues = [], aligned = true, tcues = null, translationPending = false,
     backend = 'tlang', sourceLang = 'de', videoId = 'sample',
     settings = {}, manifestVersion = MANIFEST_VERSION, i18nThrows = false, dead = false,
-    playerWidth = 1280, playerHeight = 720, controlHeight = 0, overlayHeight = 0
+    playerWidth = 1280, playerHeight = 720, controlHeight = 0, overlayHeight = 0,
+    initialNativeCaption = '', skipCues = false
   } = options;
 
   // Extension-context death (the extension was reloaded/updated while this page
@@ -109,7 +110,7 @@ async function mountContent(options = {}) {
   const storageWrites = [];
   const location = { href: `https://www.youtube.com/watch?v=${videoId}` };
   const time = clock();
-  let nativeCaption = '';
+  let nativeCaption = initialNativeCaption;
   let nocuesSent = false;
 
   const video = { currentTime: 0.1, paused: false, playbackRate: 1 };
@@ -130,7 +131,7 @@ async function mountContent(options = {}) {
   });
   const document = {
     hidden: false,
-    documentElement: { classList: { toggle() {} } },
+    documentElement: element(),
     body: element(),
     createElement() {
       const el = element();
@@ -237,6 +238,8 @@ async function mountContent(options = {}) {
 
   const api = {
     requests, outbound, storageWrites, timers, timeouts, video, player, resizeObservers,
+    rootEl: document.documentElement,
+    native(text) { nativeCaption = text; return api; },
     resizePlayer(width, height) {
       geometry.width = width; geometry.height = height;
       for (const observer of resizeObservers) {
@@ -350,7 +353,7 @@ async function mountContent(options = {}) {
     settle() { return new Promise(setImmediate); }
   };
 
-  post({ type: 'cues', aligned, cues, tcues, translationPending });
+  if (!skipCues) post({ type: 'cues', aligned, cues, tcues, translationPending });
   return api;
 }
 
