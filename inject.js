@@ -18,6 +18,7 @@
   const extensionFetchUrls = new Set();
   const ORIGINAL_TIMEOUT_MS = 8000;
   const TRANSLATION_TIMEOUT_MS = 5000;
+  const timingTrackCache = new Map(); // bounded, document memory only
   let produceSeq = 0;
 
   // Most recently seen timedtext URL of any kind.
@@ -44,7 +45,7 @@
   let seedTimer = null;
 
   // pending config from content.js (set once popup config arrives)
-  let cfg = null;            // { targetLang, useTlang }
+  let cfg = null;            // { targetLang, useTlang, useWordTiming }
   let nocuesTimer = null;    // fires if no timedtext URL shows up
   let producedForUrl = "";   // dedupe: last sourceUrl we produced cues for
   // Monotonic request token echoed back to content.js so it can drop any
@@ -137,18 +138,22 @@
       if (!ev || !Array.isArray(ev.segs)) continue;
       let text = "";
       let words = null;
+      let prefix = "";
       for (const s of ev.segs) {
         if (!s || typeof s.utf8 !== "string") continue;
         text += s.utf8;
-        // Auto-generated tracks time every segment inside the event; manual
-        // tracks carry no offsets at all. Only the former can drive the
-        // per-word highlight, so "words" stays null elsewhere.
+        // A first segment may omit its zero offset. Keep it at the event start
+        // if later segments provide offsets; do not lose the first spoken word.
         const off = typeof s.tOffsetMs === "number" ? s.tOffsetMs : null;
         if (off === null || !isFinite(off)) {
           if (words && words.length) words[words.length - 1].u += s.utf8;
+          else prefix += s.utf8;
           continue;
         }
-        if (!words) words = [];
+        if (!words) {
+          words = [];
+          if (prefix.trim()) words.push({ t: ev.tStartMs || 0, u: prefix });
+        }
         words.push({
           t: (typeof ev.tStartMs === "number" ? ev.tStartMs : 0) + off,
           u: s.utf8
@@ -262,15 +267,37 @@
       if (translationPromise) {
         post("cues", { cues, tcues: null, aligned: null,
           translationPending: true, sourceLang, nonce: myNonce });
+      } else {
+        post("cues", { cues, tcues: null, aligned: null, sourceLang, nonce: myNonce });
       }
 
-      const tcues = translationPromise ? await translationPromise : null;
+      let tcues = null;
+      let aligned = null;
+      let translationComplete = !translationPromise;
+      // Optional word timing must not hold up the original or its translation.
+      // A later update upgrades the same text without switching the user's CC.
+      if (cfg.useWordTiming && window.YtdsWordTiming) {
+        const donorUrl = automaticTimingUrl(sourceLang, baseUrl);
+        if (donorUrl && cues.some((c) => !window.YtdsWordTiming.captionPieces(c, sourceLang))) {
+          timingTrack(donorUrl).then((donor) => {
+            if (!isCurrent() || !cfg.useWordTiming) return;
+            if (!window.YtdsWordTiming.align(cues, donor, sourceLang)) return;
+            post("cues", { cues, tcues, aligned, sourceLang, nonce: myNonce,
+              translationUpdate: true, wordTimingUpdate: true,
+              translationPending: !translationComplete });
+          }).catch(() => {});
+        }
+      }
+
+      if (!translationPromise) return;
+      tcues = await translationPromise;
       if (!isCurrent()) return;
+      translationComplete = true;
 
       // Pair by event order before sorting, but reject outliers with a very
       // different timestamp. Equal event counts alone do not prove alignment.
       // Rejected fragments use the complete-sentence fallback in content.js.
-      const aligned = tcues ? (cues.length === tcues.length) : null;
+      aligned = tcues ? (cues.length === tcues.length) : null;
       if (tcues && aligned) {
         for (let i = 0; i < cues.length; i++) {
           cues[i].trans = Math.abs(cues[i].start - tcues[i].start) <= 1200
@@ -392,6 +419,31 @@
       }
     } catch (_e) { /* never throw */ }
     return out;
+  }
+
+  function automaticTimingUrl(language, originalUrl) {
+    const normalized = String(language || "").replace(/_/g, "-").toLowerCase();
+    if (!normalized || normalized === "auto") return "";
+    const match = trackEntries().find((t) =>
+      (t.kind === "asr" || String(t.vssId).startsWith("a.")) &&
+      String(t.languageCode || langOfUrl(t.url)).replace(/_/g, "-").toLowerCase() === normalized &&
+      vidOfUrl(t.url) === currentVideoId && normKey(t.url) !== normKey(originalUrl));
+    return match ? match.url : "";
+  }
+
+  function timingTrack(url) {
+    const key = normKey(url);
+    if (timingTrackCache.has(key)) return timingTrackCache.get(key);
+    const request = fetchJson3(buildUrl(url, null), TRANSLATION_TIMEOUT_MS)
+      .then(parseJson3).catch(() => {
+        timingTrackCache.delete(key); // later config/source capture can retry
+        return [];
+      });
+    timingTrackCache.set(key, request);
+    while (timingTrackCache.size > 4) {
+      timingTrackCache.delete(timingTrackCache.keys().next().value);
+    }
+    return request;
   }
 
   // The track the player has actually selected (auto-selected or chosen by the
@@ -525,7 +577,8 @@
         // captured for the now-current video.
         checkVideoChange();
         currentVideoId = videoIdFromLocation();
-        cfg = { targetLang: d.targetLang, useTlang: !!d.useTlang };
+        cfg = { targetLang: d.targetLang, useTlang: !!d.useTlang,
+          useWordTiming: !!d.useWordTiming };
         // Adopt the content-supplied nonce so our posts correlate to THIS
         // sendConfig(); content.js drops any reply with an older nonce.
         if (typeof d.nonce === "number") reqNonce = d.nonce;
@@ -542,6 +595,9 @@
           armNocuesTimer();             // wait for player's timedtext fetch
           seedSourceSoon();             // ...but try to start earlier (B1)
         }
+      } else if (d.type === "word-timing-config") {
+        // Turning highlighting off needs no refetch of the original/translation.
+        if (cfg) cfg.useWordTiming = !!d.useWordTiming;
       } else if (d.type === "export-request") {
         // On-demand SRT export: build a COMPLETE bilingual cue set regardless of
         // the live backend mode (see produceExport). Correlated by exportId.

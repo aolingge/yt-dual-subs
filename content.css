@@ -216,3 +216,19 @@ html.ytds-active.ytds-rendering .caption-window {
   height: 24px;
   transition: color .12s ease;
 }
+/* This label stays visible whenever word positions are estimated. The pseudo
+   element is excluded from text selection/copy and participates in layout. */
+.ytds-karaoke-estimated .ytds-orig::before {
+  content: attr(data-ytds-timing-label);
+  display: block;
+  font: 500 11px/1.4 system-ui, sans-serif;
+  letter-spacing: .02em;
+  color: #fff3cb;
+  text-shadow: none;
+  margin-bottom: 2px;
+  opacity: .9;
+}
+.ytds-karaoke-estimated .ytds-w-on {
+  outline: 1px dashed currentColor;
+  outline-offset: 1px;
+}

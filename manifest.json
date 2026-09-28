@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "__MSG_extName__",
-  "version": "3.8.2",
+  "version": "3.9.0",
   "description": "__MSG_extDesc__",
   "permissions": ["storage"],
   "host_permissions": [
@@ -34,14 +34,14 @@
   "content_scripts": [
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["inject.js"],
+      "js": ["word-timing.js", "inject.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": false
     },
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["content.js"],
+      "js": ["word-timing.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_end",
       "all_frames": false

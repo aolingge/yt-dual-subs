@@ -62,12 +62,14 @@ async function mountCues(cues, aligned = true, tcues = null,
   class TestURL extends URL {}
   TestURL.createObjectURL = () => 'blob:test';
   TestURL.revokeObjectURL = () => {};
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), {
+  const context = vm.createContext({
     chrome, document, window, URL: TestURL, Blob,
     location: { href: 'https://www.youtube.com/watch?v=sample' },
     setTimeout(fn) { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {}
   });
+  vm.runInContext(fs.readFileSync(path.join(root, 'word-timing.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), context);
   await new Promise(setImmediate);
   listeners.message({ source: window, data: {
     source: 'ytds-inject', type: 'cues', videoId: 'sample', aligned, cues, tcues,

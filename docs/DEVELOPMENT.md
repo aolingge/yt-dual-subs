@@ -17,7 +17,8 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 
 | File | Responsibility |
 | --- | --- |
-| `inject.js` | Page-world caption request capture; original and translated track loading. |
+| `inject.js` | Page-world caption capture; original/translated track loading and optional same-language automatic timing track. |
+| `word-timing.js` | Shared Unicode word segmentation, timestamp validation, conservative lexical matching, and display-only estimation. Loaded before the bridge/renderer in their respective worlds. |
 | `content.js` | Video-clock caption rendering, sentence grouping, native-caption fallback, word lookup, drag/resize, player controls, and study messages. |
 | `background.js` | Google translation requests, deduplication, caching, deadlines, and shortcut dispatch. |
 | `popup.html`, `popup.css`, `popup.js` | Settings, preview, status, current-video actions, and SRT export. |
@@ -33,6 +34,8 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 3. The content script groups cues for readable sentences and selects the current sentence using `video.currentTime`.
 4. Translated cues are paired and timestamp-checked. When needed, the service worker translates the displayed sentence through Google; pending requests can also prepare the next two sentences.
 5. A translation response rechecks the current video/sentence before repainting. Old results may be cached, but must not be shown beside a different sentence.
+6. Word highlighting prefers native caption word times. Missing times can be matched against a same-language ASR track in the background; only a unique contiguous lexical match near the original cue is accepted. Translated tracks, other videos, ambiguous repetitions, and changed/missing words do not supply times.
+7. If enabled, approximate progress distributes words over the displayed sentence duration. Its badge stays visible and the popup identifies the source. This feature does not analyze audio.
 
 ## Preserve these behaviors
 
@@ -45,6 +48,7 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 - **Language isolation:** translation cache keys include source language, target language, and text. Unknown source language can fall back to detection.
 - **Storage:** resetting subtitle preferences must preserve saved cards. Imports merge validated cards without deleting the existing collection.
 - **Export integrity:** translated/bilingual SRT must not silently omit missing or misaligned spoken lines.
+- **Timing provenance:** retain native/matched metadata through grouping and video caches. Estimated times are rendering data, never inserted into raw cues or SRT. Late timing updates must not restart sentence repeat, hide a manually revealed translation, or discard a pending fast translation.
 
 ## Run focused checks
 
@@ -59,6 +63,7 @@ For a focused check:
 ```sh
 node --test tests/latency.test.cjs tests/startup.test.cjs
 node --test tests/layout.test.cjs tests/resize.test.cjs
+node --test tests/word-timing.test.cjs tests/study.test.cjs
 ```
 
 The suites execute the shipping scripts inside a VM with simulated DOM and extension APIs. They cover startup, clock alignment, source recovery, translation languages, deadlines, layout, selection, resize, shortcuts, study, and extension reloads.
@@ -67,7 +72,7 @@ The suites execute the shipping scripts inside a VM with simulated DOM and exten
 
 ## Documentation screenshots
 
-The images in `docs/images/` use the real v3.8.1 extension interface with an original illustrated lake scene and sample German/Chinese captions. They are demonstration fixtures, not screenshots of a live YouTube video or a user's browser profile. The word-lookup capture used the live Google endpoint.
+Most images in `docs/images/` use the real v3.8.1 interface with an original illustrated lake scene and sample German/Chinese captions. `spoken-word-highlighting.png` shows v3.9.0 with controlled caption timestamps and a real playing media clock. These are demonstration fixtures, not live YouTube screenshots or measured alignment to German speech. The original word-lookup capture used the live Google endpoint; the v3.9.0 regression fixture stubs lookup responses.
 
 ## Submit a change
 

@@ -268,7 +268,13 @@
       </div>
 
       <div class="pos-foot">
-        <span class="pos-hint" data-i18n="karaokeHint">整句照常显示；只有自动生成的字幕带有词级时间，作者上传的字幕只显示整句</span>
+        <span class="pos-hint" data-i18n="karaokeHint">优先使用原字幕词时间；缺少时自动尝试匹配同语言自动字幕，整句始终完整显示。</span>
+        <label class="chk karaoke-approximate">
+          <input type="checkbox" id="karaokeApproximate" />
+          <span data-i18n="karaokeApproximateLabel">无词时间时启用近似跟读</span>
+        </label>
+        <span class="pos-hint" data-i18n="karaokeApproximateHint">按句子时长估算高亮，画面会标注“近似跟读”；关闭后只使用可靠字幕词时间。</span>
+        <p class="pos-hint" id="karaokeStatus" role="status"></p>
       </div>
 
       <div class="row check-row">

@@ -15,7 +15,7 @@ Original captions, translations, word lookup, and sentence practice — right on
 </p>
 
 <p align="center">
-  <img alt="Version 3.8.2" src="https://img.shields.io/badge/version-3.8.2-3ea6ff" />
+  <img alt="Version 3.9.0" src="https://img.shields.io/badge/version-3.9.0-3ea6ff" />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -51,7 +51,23 @@ Pause the pointer on an original-caption word for about 0.4 seconds. The lookup 
 3. Use **Repeat sentence**, **Previous**, and **Next** to practice a difficult line.
 4. Save useful sentences, then review them with the translation hidden. Mark them learned when ready.
 
-**Follow the spoken word:** in **Study**, enable **Box the word being spoken**. The whole original sentence stays visible while the word highlight follows the caption timestamps, including after returning to a cached video. This works automatically across languages when the track provides word timings, commonly on auto-generated captions. Sentence-only tracks cannot provide exact word highlighting without an additional audio-alignment process; the extension currently does not run speech recognition or invent word timings.
+### Follow each word automatically
+
+In **Study**, enable **Box the word being spoken**. The complete sentence stays visible while the highlight moves with the video clock, including after seeking or returning to a cached video. The extension automatically chooses the available timing source:
+
+| Available caption data | What you see |
+| --- | --- |
+| Original track provides individual word times | Highlight follows those caption word times. |
+| Original has sentence times; a same-language automatic track has matching words | Reliable, nearby word matches supply timestamps without changing your selected original text. |
+| No reliable word match | **Approximate** progress, clearly labeled in the video and estimated from sentence duration. |
+
+Approximate progress is enabled by default. Turn off **Use approximate progress when word times are missing** to require caption word timestamps; unmatched sentences then remain visible without a word highlight. The popup shows the source used for the current sentence.
+
+![The complete German sentence remains visible while Spaziergang is highlighted](docs/images/spoken-word-highlighting.png)
+
+*Actual v3.9.0 interface using controlled caption timestamps and a playing demo video. This illustrates the feature, not measured alignment to German speech.*
+
+This works across supported caption languages and needs no API key or setup per video. Videos must provide usable captions. Even automatic-caption timestamps can be imperfect; approximate progress is a reading aid, not precise speech alignment. The extension does not transcribe audio, so it cannot guarantee exact word following for every video or create missing captions.
 
 <table>
   <tr>
@@ -68,7 +84,7 @@ Pause the pointer on an original-caption word for about 0.4 seconds. The lookup 
 
 For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load unpacked**.
 
-1. [Download yt-dual-subs-3.8.2.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.8.2/yt-dual-subs-3.8.2.zip) and extract it to a folder you will keep.
+1. [Download yt-dual-subs-3.9.0.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.9.0/yt-dual-subs-3.9.0.zip) and extract it to a folder you will keep.
 2. Open `edge://extensions` in Edge, or `chrome://extensions` in Chrome.
 3. Turn on **Developer mode**, then click **Load unpacked**.
 4. Select the extracted **yt-dual-subs** folder — the one containing `manifest.json`.
@@ -168,7 +184,7 @@ Read the [full privacy and permission details](docs/PRIVACY.md).
 
 Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
 
-Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [v3.8.2 release notes](docs/releases/v3.8.2.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [v3.9.0 release notes](docs/releases/v3.9.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
 
 ## Credits and license
 

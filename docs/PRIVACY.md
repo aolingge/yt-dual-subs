@@ -2,13 +2,14 @@
 
 [Back to the README](../README.md) · [中文](#中文)
 
-These details describe version **3.8.2**. This extension has no analytics, advertising code, extension account, or developer-operated translation server. YouTube, Google, your browser, and dictionary websites have their own data practices.
+These details describe version **3.9.0**. This extension has no analytics, advertising code, extension account, or developer-operated translation server. YouTube, Google, your browser, and dictionary websites have their own data practices.
 
 ## What leaves your browser
 
 | Feature | Destination | Data sent and when |
 | --- | --- | --- |
 | Caption loading | YouTube | Requests for the video's original and translated caption tracks. The extension uses the player's existing caption request. |
+| Automatic word timing | YouTube | When word times are missing, a same-language automatic caption track may also be requested and matched locally. Disabling word highlighting skips this additional request. Approximate progress is calculated locally from sentence duration. No audio is captured, transcribed, or sent for this feature. |
 | Whole-sentence translation | YouTube, with Google fallback | Prefers a translated YouTube track. If it is still pending after 1.5 seconds or unavailable, Google receives the current sentence and a look-ahead of up to two sentences. |
 | Per-sentence translation | Google Translate endpoint | Sentence text, source language when known, and chosen target language. |
 | Fast display | YouTube and Google | Starts both paths immediately; Google can receive the current sentence and next two sentences while the YouTube track loads. |
@@ -43,11 +44,12 @@ Only share the information needed to reproduce an issue. Public video links are 
 
 ## 中文
 
-本说明对应 **3.8.2**。扩展没有统计、广告代码、扩展账号或开发者运营的翻译服务器。YouTube、Google、浏览器和词典网站仍有各自的数据处理规则。
+本说明对应 **3.9.0**。扩展没有统计、广告代码、扩展账号或开发者运营的翻译服务器。YouTube、Google、浏览器和词典网站仍有各自的数据处理规则。
 
 ### 哪些内容会发送到外部
 
 - **字幕加载：**向 YouTube 请求视频原文字幕轨及译文轨，使用播放器已有的字幕请求。
+- **自动跟读时间：**原字幕缺少词时间时，可额外向 YouTube 请求同语言自动字幕，在本地匹配词时间。关闭逐词高亮后，新字幕请求不加载这条补充轨；近似跟读按句子时长在本地计算，本功能不采集、识别或上传音频。
 - **整句翻译：**优先使用 YouTube；译文等待超过 1.5 秒或不可用时，Google 可收到当前句及后两句。
 - **逐句翻译：**向 Google 发送字幕句子、已知的原文语言和目标语言。
 - **快速显示：**立即并行使用 YouTube 和 Google；等待整轨译文时，Google 可收到当前句及后两句。

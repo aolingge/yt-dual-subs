@@ -15,7 +15,8 @@ const DEFAULTS = {
   // study aids (see the "study mode" section below)
   repeatCount: 0,              // 0 = off, N = play each sentence N times, -1 = loop
   studyRate: 0.75,             // playback rate used while repeating a sentence
-  karaoke: true,               // highlight the word being spoken (needs word times)
+  karaoke: true,               // prefer caption word times; optional labeled estimate
+  karaokeApproximate: true,
   wordLookup: true,            // translate a word after a short mouse hover
   revealMode: "always",        // translation visibility: "always" | "hover" | "manual"
   autoCaptions: true,          // turn YouTube's own CC on for you when the page loads
@@ -294,6 +295,17 @@ async function refreshStatus() {
     ? await sendToTab(tab.id, { type: "status" }) : null;
   el.textContent = statusText(resp);
   el.hidden = false;
+  const timing = $("karaokeStatus");
+  const labels = {
+    captions: t("karaokeStatusCaptions", "跟读：使用原字幕词时间"),
+    automatic: t("karaokeStatusAutomatic", "跟读：已匹配同语言自动字幕词时间"),
+    estimated: t("karaokeStatusEstimated", "近似跟读：按句子时长估算，不代表精确语音时间"),
+    unavailable: t("karaokeStatusUnavailable", "此句无可靠词时间，显示完整句子"),
+    waiting: t("karaokeStatusWaiting", "跟读：等待带有时间的原文字幕"),
+    off: t("karaokeStatusOff", "逐词跟读已关闭")
+  };
+  const timingText = resp ? labels[resp.wordTiming] || labels.waiting : "";
+  if (timing && timing.textContent !== timingText) timing.textContent = timingText;
 }
 
 function startStatus() {
@@ -387,6 +399,7 @@ function bindUI() {
   $("offsetMs").value = state.offsetMs;
   $("offsetMsV").textContent = formatOffset(state.offsetMs);
   $("karaoke").checked = state.karaoke;
+  $("karaokeApproximate").checked = state.karaokeApproximate;
   $("wordLookup").checked = state.wordLookup;
   $("autoCaptions").checked = state.autoCaptions;
   paintSegs();
@@ -501,6 +514,7 @@ function wire() {
   document.querySelectorAll("#revealMode button").forEach((b) =>
     b.addEventListener("click", () => { setKey("revealMode", b.dataset.val); paintSegs(); }));
   $("karaoke").addEventListener("change", (e) => setKey("karaoke", e.target.checked));
+  $("karaokeApproximate").addEventListener("change", (e) => setKey("karaokeApproximate", e.target.checked));
   $("wordLookup").addEventListener("change", (e) => setKey("wordLookup", e.target.checked));
 
   // tabs

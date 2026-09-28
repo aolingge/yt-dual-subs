@@ -248,6 +248,9 @@ select:focus { border-color: var(--accent); }
   gap: 8px; margin-top: 2px;
 }
 .pos-hint { font-size: 10.5px; color: var(--muted); flex: 1; }
+.pos-foot:has(.karaoke-approximate) { flex-direction: column; align-items: stretch; gap: 7px; }
+.karaoke-approximate { font-size: 12px; }
+#karaokeStatus { margin: 0; color: var(--accent); }
 .link {
   background: none; border: 0; color: var(--accent);
   font-size: 11px; cursor: pointer; padding: 0; flex: none;

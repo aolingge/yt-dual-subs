@@ -82,7 +82,8 @@
     // study aids (see the "study mode" section below)
     repeatCount: 0,              // 0 = off, N = play each sentence N times, -1 = loop
     studyRate: 0.75,             // playback rate used while repeating a sentence
-    karaoke: true,               // highlight the word being spoken (needs word times)
+    karaoke: true,               // prefer caption word times; optional labeled estimate
+    karaokeApproximate: true,
     wordLookup: true,            // translate a word after a short mouse hover
     revealMode: "always",        // translation visibility: "always" | "hover" | "manual"
     autoCaptions: true,          // turn YouTube's own CC on for you when the page loads
@@ -233,6 +234,7 @@
   let revealShown = false;      // "manual" reveal: shown for the current sentence
   let hoverHideTimer = 0;       // "hover" reveal: hides once the pointer goes idle
   let wordSpans = null;         // karaoke spans of the original line, or null
+  let wordTimingSource = "waiting";
   let wordTimes = null;         // parallel word start times (raw track ms)
   let activeWordIdx = -1;       // highlighted word index
   let overlayResizeObserver = null;
@@ -347,7 +349,13 @@
       applyRevealState();
     }
     if ("wordLookup" in changes || "targetLang" in changes) hideWordLookup();
-    if ("karaoke" in changes || "revealMode" in changes) {
+    if ("karaoke" in changes && !settings.karaoke) {
+      try {
+        window.postMessage({ source: "ytds-content", type: "word-timing-config",
+          useWordTiming: false }, "*");
+      } catch (_e) { /* ignore */ }
+    }
+    if ("karaoke" in changes || "karaokeApproximate" in changes || "revealMode" in changes) {
       activeCueIdx = -1;              // re-render the current sentence
       cueDirty = true;
       cueTick();
@@ -383,7 +391,8 @@
     }
     // Style changes need no network work. A toggle or translation setting
     // change asks for cues once, after the old translation has been invalidated.
-    if (settings.enabled && (enabledChanged || needRecue)) sendConfig();
+    if (settings.enabled && (enabledChanged || needRecue ||
+        ("karaoke" in changes && settings.karaoke))) sendConfig();
   });
 
   // ---- generic helpers -----------------------------------------------------
@@ -986,6 +995,8 @@
     wordSpans = null;
     wordTimes = null;
     activeWordIdx = -1;
+    wordTimingSource = "waiting";
+    if (overlay) overlay.classList.remove("ytds-karaoke-estimated");
   }
 
   function setOriginal(text) {
@@ -1174,55 +1185,44 @@
   }
 
   // ---- karaoke: word-level highlight ---------------------------------------
-  // Only auto-generated tracks carry per-word offsets (json3 segs[].tOffsetMs),
-  // so this silently falls back to the plain line for manual captions.
+  // Real caption offsets take priority. Estimation is visibly labeled and is
+  // computed only for rendering, so exports and cached source times stay intact.
   function buildWordPieces(cue) {
-    if (!settings.karaoke || !cue || !Array.isArray(cue.words)) return null;
-    const pieces = [];
-    for (const w of cue.words) {
-      if (!w) continue;
-      let txt = String(w.u == null ? "" : w.u).replace(/\s+/g, " ");
-      if (!txt.trim()) {
-        // Spaces/punctuation without their own offset belong to the last word.
-        if (pieces.length) pieces[pieces.length - 1].u += txt;
-        continue;
-      }
-      // Keep one space at a word boundary when the track text had none.
-      const prev = pieces[pieces.length - 1];
-      if (prev && !/\s$/.test(prev.u) &&
-          !/^[\s,.;:!?。，！？；：)\]}]/.test(txt)) {
-        txt = " " + txt;
-      }
-      pieces.push({ t: Number(w.t) || 0, u: txt });
-    }
-    if (pieces.length < 2) return null;
-    // A highlight may only be drawn when the words rebuild exactly the sentence
-    // on screen — after a rolling-ASR merge or a de-duplicated join they may
-    // not, and then a wrong word would light up.
-    const built = stripSoundDescriptions(pieces.map((p) => p.u).join(""));
-    if (built !== stripSoundDescriptions(cue.text)) return null;
-    return pieces;
+    if (!settings.karaoke || !cue || !window.YtdsWordTiming) return null;
+    const clean = { ...cue, text: stripSoundDescriptions(cue.text),
+      words: Array.isArray(cue.words)
+        ? cue.words.map((w) => w && ({ ...w, u: stripSoundDescriptions(w.u) })) : null };
+    const pieces = window.YtdsWordTiming.captionPieces(clean, cueSourceLang);
+    if (pieces) return { pieces, source: cue.wordTimingSource || "captions" };
+    const estimated = settings.karaokeApproximate
+      ? window.YtdsWordTiming.estimate(clean, cueSourceLang) : null;
+    return estimated ? { pieces: estimated, source: "estimated" } : null;
   }
 
   function setOriginalWithWords(cue) {
     if (!ensureOverlay()) return;
     hideWordLookup();
-    const pieces = buildWordPieces(cue);
-    if (!pieces) {
+    const plan = buildWordPieces(cue);
+    if (!plan) {
       setOriginal(cue ? cue.text : "");
+      wordTimingSource = settings.karaoke && cue ? "unavailable" : "waiting";
       return;
     }
     clearWordSpans();
+    wordTimingSource = plan.source;
+    overlay.classList.toggle("ytds-karaoke-estimated", plan.source === "estimated");
+    origEl.setAttribute("data-ytds-timing-label", t("karaokeEstimatedBadge", "近似跟读"));
     origEl.textContent = "";              // drop the previous text/spans
     const spans = [];
     const times = [];
-    for (const p of pieces) {
-      const span = document.createElement("span");
-      span.className = "ytds-w ytds-lookup-word";
-      span.textContent = p.u;
-      origEl.appendChild(span);
-      spans.push(span);
-      times.push(p.t);
+    for (const p of plan.pieces) {
+      for (const part of segmentCaptionWords(p.u)) {
+        const span = document.createElement("span");
+        span.className = part.word ? "ytds-w ytds-lookup-word" : "ytds-lookup-sep";
+        span.textContent = part.text;
+        origEl.appendChild(span);
+        if (part.word) { spans.push(span); times.push(p.t); }
+      }
     }
     wordSpans = spans;
     wordTimes = times;
@@ -1879,6 +1879,7 @@
           // raw cue: a rolling ASR revision or an overlap-merge would place the
           // highlight on the wrong word, so those groups clear them.
           words: rolling ? null : (cue.words || null),
+          wordTimingSource: cue.wordTimingSource || "captions",
           rolling: !!rolling,
           lastStart: cue.start, lastEnd: cueEnd
         };
@@ -1892,6 +1893,8 @@
           rawCount: current.rawCount + 1,
           words: !rolling && !current.rolling && current.words && cue.words
             ? current.words.concat(cue.words) : null,
+          wordTimingSource: current.wordTimingSource === "automatic" ||
+            cue.wordTimingSource === "automatic" ? "automatic" : "captions",
           rolling: current.rolling || !!rolling,
           lastStart: cue.start, lastEnd: cueEnd
         };
@@ -1913,6 +1916,7 @@
     videoCueCache.set(cueVideoId, {
       cues: cueList.map((c) => ({
         start: c.start, dur: c.dur, text: c.text, trans: c.trans || "",
+        wordTimingSource: c.wordTimingSource || "captions",
         words: Array.isArray(c.words)
           ? c.words.map((w) => w && { t: w.t, u: w.u }) : null
       })),
@@ -1939,6 +1943,7 @@
     const sameLang = cached.targetLang === settings.targetLang;
     const cues = cached.cues.map((c) => ({
       start: c.start, dur: c.dur, text: c.text,
+      wordTimingSource: c.wordTimingSource || "captions",
       trans: sameLang ? c.trans : "",
       words: Array.isArray(c.words)
         ? c.words.map((w) => w && { t: w.t, u: w.u }) : null
@@ -2019,6 +2024,11 @@
       const idx = video
         ? activeCueIdxAt(video.currentTime * 1000 + (Number(settings.offsetMs) || 0))
         : -1;
+      if (data.wordTimingUpdate && idx >= 0 && idx === activeCueIdx &&
+          lineText(origEl) === displayCueList[idx].text) {
+        setOriginalWithWords(displayCueList[idx]);
+        highlightWord(wordIdxAt(video.currentTime * 1000 + (Number(settings.offsetMs) || 0)));
+      }
       if (idx !== activeCueIdx || idx < 0 ||
           lineText(origEl) !== displayCueList[idx].text) {
         // Do not advance activeCueIdx without repainting the original: that
@@ -2192,6 +2202,7 @@
       mode,                                 // cues | scrape | off
       source: cueVideoId ? "youtube" : (lastSource ? "native" : "none"),
       transSource,                          // youtube | google | waiting | none
+      wordTiming: !settings.enabled || !settings.karaoke ? "off" : wordTimingSource,
       cueCount: displayCueList ? displayCueList.length : 0,
       pending: !!translationPending,
       cached: !!usedVideoCache,
@@ -2578,6 +2589,7 @@
         type: "config",
         targetLang: settings.targetLang,
         useTlang: settings.backend !== "gtx",
+        useWordTiming: !!settings.karaoke,
         nonce
       }, "*");
     } catch (_e) { /* ignore */ }

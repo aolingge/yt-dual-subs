@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="版本 3.8.2" src="https://img.shields.io/badge/version-3.8.2-3ea6ff" />
+  <img alt="版本 3.9.0" src="https://img.shields.io/badge/version-3.9.0-3ea6ff" />
   <a href="LICENSE"><img alt="MIT 开源许可" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Chrome 和 Edge 桌面浏览器" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="无需 API 密钥" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -51,7 +51,23 @@
 3. 使用**复读当前句、上一句、下一句**，把难句多听几遍。
 4. 收藏值得记住的表达，复习时先不看译文，掌握后标记完成。
 
-**跟着声音看单词：**在**学习**中开启**读到哪个词就框住哪个词**。整句原文保持显示，高亮随字幕给出的逐词时间移动，重新返回看过的视频也能保留。各语言都使用同一流程；通常自动生成的字幕会提供这种时间。只有整句时间的字幕，要精确逐词跟随还需要额外分析音频并对齐，当前扩展没有语音识别，也不会把估算时间当成实际朗读时间。
+### 自动跟着播放高亮单词
+
+在**学习**中开启**读到哪个词就框住哪个词**。整句原文一直完整显示，高亮跟随视频时间移动；拖动进度、暂停、更换视频后返回，也会按当前播放位置更新。扩展自动选择可用的时间来源：
+
+| 视频提供的字幕数据 | 高亮方式 |
+| --- | --- |
+| 原字幕有逐词时间 | 直接跟随字幕词时间。 |
+| 原字幕只有句子时间，同语言自动字幕有对应词时间 | 匹配附近且明确对应的词，补充时间，保留你选择的原文内容。 |
+| 无法可靠匹配词时间 | 按句子时长显示**近似跟读**，画面明确标注。 |
+
+近似跟读默认开启。如果只想使用字幕给出的词时间，关闭**无词时间时启用近似跟读**即可；无法匹配的句子仍完整显示。设置面板会显示当前句采用的时间来源。
+
+![完整德语原文保持显示，播放到 Spaziergang 时高亮该词](docs/images/spoken-word-highlighting.png)
+
+*图中是 3.9.0 实际界面，使用受控字幕时间与正在播放的演示视频，展示功能操作；没有测量与德语语音的实际对齐精度。*
+
+各字幕语言都使用这套流程，无需为每个视频设置，也不要求 API 密钥。视频需要有可用字幕；自动字幕自身的词时间也可能有误差。近似跟读只是阅读辅助，不能代表精确朗读时间。扩展当前不识别音频，因此不能保证所有视频精确逐词跟随，也无法凭空生成缺失的字幕。
 
 <table>
   <tr>
@@ -70,7 +86,7 @@
 
 支持 **Chrome、Microsoft Edge 桌面浏览器**。当前通过**加载已解压的扩展**安装。
 
-1. [下载 yt-dual-subs-3.8.2.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.8.2/yt-dual-subs-3.8.2.zip)，解压到一个准备长期保留的文件夹。
+1. [下载 yt-dual-subs-3.9.0.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.9.0/yt-dual-subs-3.9.0.zip)，解压到一个准备长期保留的文件夹。
 2. Edge 打开 `edge://extensions`；Chrome 打开 `chrome://extensions`。
 3. 开启**开发者模式**，点击**加载已解压的扩展程序**。
 4. 选择解压后的 **yt-dual-subs** 文件夹，即包含 `manifest.json` 的那一层。
@@ -170,7 +186,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 
 遇到问题可[提交 Issue](https://github.com/aolingge/yt-dual-subs/issues)，说明浏览器与扩展版本、字幕语言、翻译模式和复现步骤。有帮助时可附公开视频链接，请勿上传个人信息。
 
-欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.8.2 更新说明](docs/releases/v3.8.2.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
+欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.9.0 更新说明](docs/releases/v3.9.0.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
 
 ## 致谢与许可
 

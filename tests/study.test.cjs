@@ -77,7 +77,7 @@ test('the sentence is shown whole and only the spoken word is boxed', async () =
 
   const spans = player.wordSpans();
   assert.equal(spans.length, 3, 'one span per word');
-  assert.deepEqual(spans.map((s) => s.textContent), ['Hallo', ' schöne', ' Welt']);
+  assert.deepEqual(spans.map((s) => s.textContent), ['Hallo', 'schöne', 'Welt']);
   spans.forEach((s) => assert.ok(s.hasClass('ytds-w'), 'every word keeps the plain look'));
   assert.equal(player.activeWordIdx(), 0);
 

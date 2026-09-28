@@ -3,7 +3,7 @@
 // changes, SPA navigation, playback position, and a controllable clock.
 //
 // No production code is duplicated here: content.js is executed verbatim with
-// vm.runInNewContext, so every assertion exercises the shipping source.
+// node:vm, so every assertion exercises the shipping source.
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -186,7 +186,8 @@ async function mountContent(options = {}) {
     }
   };
   class TestURL extends URL {}
-  TestURL.createObjectURL = () => 'blob:test';
+  const downloadedBlobs = [];
+  TestURL.createObjectURL = (blob) => { downloadedBlobs.push(blob); return 'blob:test'; };
   TestURL.revokeObjectURL = () => {};
   class TestResizeObserver {
     constructor(callback) { this.callback = callback; this.targets = new Set(); resizeObservers.push(this); }
@@ -194,12 +195,14 @@ async function mountContent(options = {}) {
     disconnect() { this.targets.clear(); }
   }
 
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), {
+  const context = vm.createContext({
     chrome, document, window, URL: TestURL, Blob, Date: time.Date, location,
     ResizeObserver: TestResizeObserver,
     setTimeout(fn) { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {}
   });
+  vm.runInContext(fs.readFileSync(path.join(root, 'word-timing.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), context);
   await new Promise(setImmediate);
 
   // removeOverlay() detaches the previous overlay, so always read the newest
@@ -237,7 +240,7 @@ async function mountContent(options = {}) {
   }
 
   const api = {
-    requests, outbound, storageWrites, timers, timeouts, video, player, resizeObservers,
+    requests, outbound, storageWrites, timers, timeouts, video, player, resizeObservers, downloadedBlobs,
     rootEl: document.documentElement,
     native(text) { nativeCaption = text; return api; },
     resizePlayer(width, height) {
