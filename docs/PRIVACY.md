@@ -2,7 +2,7 @@
 
 [Back to the README](../README.md) · [中文](#中文)
 
-These details describe version **3.8.1**. This extension has no analytics, advertising code, extension account, or developer-operated translation server. YouTube, Google, your browser, and dictionary websites have their own data practices.
+These details describe version **3.8.2**. This extension has no analytics, advertising code, extension account, or developer-operated translation server. YouTube, Google, your browser, and dictionary websites have their own data practices.
 
 ## What leaves your browser
 
@@ -43,7 +43,7 @@ Only share the information needed to reproduce an issue. Public video links are 
 
 ## 中文
 
-本说明对应 **3.8.1**。扩展没有统计、广告代码、扩展账号或开发者运营的翻译服务器。YouTube、Google、浏览器和词典网站仍有各自的数据处理规则。
+本说明对应 **3.8.2**。扩展没有统计、广告代码、扩展账号或开发者运营的翻译服务器。YouTube、Google、浏览器和词典网站仍有各自的数据处理规则。
 
 ### 哪些内容会发送到外部
 

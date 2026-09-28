@@ -101,6 +101,35 @@ test('karaoke can be switched off and on again from the popup', async () => {
   assert.equal(player.activeWordIdx(), 0);
 });
 
+test('returning to a cached video preserves genuine word timings', async () => {
+  const player = await mountContent({ videoId: 'aaa', cues: WORDS, aligned: true });
+  player.at(1.0);
+  assert.equal(player.activeWordIdx(), 1);
+
+  player.navigate('bbb');
+  player.navigate('aaa');
+
+  assert.equal(player.status().cached, true);
+  assert.equal(player.read().original, 'Hallo schöne Welt');
+  assert.equal(player.wordSpans().length, 3, 'cached original keeps its word timestamps');
+  assert.equal(player.activeWordIdx(), 1, 'highlight resumes at the current clock');
+  player.seekTo(2.0);
+  assert.equal(player.activeWordIdx(), 2, 'seeking still follows the actual word times');
+});
+
+test('changing the translation target keeps cached original word timings', async () => {
+  const player = await mountContent({ videoId: 'aaa', cues: WORDS, aligned: true });
+  player.at(1.0);
+  player.navigate('bbb');
+  player.changeLanguage('en');
+  player.navigate('aaa');
+
+  assert.equal(player.status().cached, true);
+  assert.equal(player.read().original, 'Hallo schöne Welt');
+  assert.equal(player.wordSpans().length, 3);
+  assert.equal(player.activeWordIdx(), 1);
+});
+
 test('a word-timed track is merged into whole sentences', async () => {
   const player = await mountContent({ cues: WORD_LEVEL, aligned: true });
   player.at(0.1);

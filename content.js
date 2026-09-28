@@ -1912,7 +1912,9 @@
     videoCueCache.delete(cueVideoId);                    // refresh recency
     videoCueCache.set(cueVideoId, {
       cues: cueList.map((c) => ({
-        start: c.start, dur: c.dur, text: c.text, trans: c.trans || ""
+        start: c.start, dur: c.dur, text: c.text, trans: c.trans || "",
+        words: Array.isArray(c.words)
+          ? c.words.map((w) => w && { t: w.t, u: w.u }) : null
       })),
       tcues: Array.isArray(tcueList)
         ? tcueList.map((c) => ({ start: c.start, dur: c.dur, text: c.text }))
@@ -1937,7 +1939,9 @@
     const sameLang = cached.targetLang === settings.targetLang;
     const cues = cached.cues.map((c) => ({
       start: c.start, dur: c.dur, text: c.text,
-      trans: sameLang ? c.trans : ""
+      trans: sameLang ? c.trans : "",
+      words: Array.isArray(c.words)
+        ? c.words.map((w) => w && { t: w.t, u: w.u }) : null
     }));
     cueList = cues;
     computeCueEnds(cueList);

@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="版本 3.8.1" src="https://img.shields.io/badge/version-3.8.1-3ea6ff" />
+  <img alt="版本 3.8.2" src="https://img.shields.io/badge/version-3.8.2-3ea6ff" />
   <a href="LICENSE"><img alt="MIT 开源许可" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Chrome 和 Edge 桌面浏览器" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="无需 API 密钥" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -51,6 +51,8 @@
 3. 使用**复读当前句、上一句、下一句**，把难句多听几遍。
 4. 收藏值得记住的表达，复习时先不看译文，掌握后标记完成。
 
+**跟着声音看单词：**在**学习**中开启**读到哪个词就框住哪个词**。整句原文保持显示，高亮随字幕给出的逐词时间移动，重新返回看过的视频也能保留。各语言都使用同一流程；通常自动生成的字幕会提供这种时间。只有整句时间的字幕，要精确逐词跟随还需要额外分析音频并对齐，当前扩展没有语音识别，也不会把估算时间当成实际朗读时间。
+
 <table>
   <tr>
     <td align="center"><strong>逐句浏览、跳转与收藏</strong></td>
@@ -68,7 +70,7 @@
 
 支持 **Chrome、Microsoft Edge 桌面浏览器**。当前通过**加载已解压的扩展**安装。
 
-1. [下载 yt-dual-subs-3.8.1.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.8.1/yt-dual-subs-3.8.1.zip)，解压到一个准备长期保留的文件夹。
+1. [下载 yt-dual-subs-3.8.2.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.8.2/yt-dual-subs-3.8.2.zip)，解压到一个准备长期保留的文件夹。
 2. Edge 打开 `edge://extensions`；Chrome 打开 `chrome://extensions`。
 3. 开启**开发者模式**，点击**加载已解压的扩展程序**。
 4. 选择解压后的 **yt-dual-subs** 文件夹，即包含 `manifest.json` 的那一层。
@@ -168,7 +170,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 
 遇到问题可[提交 Issue](https://github.com/aolingge/yt-dual-subs/issues)，说明浏览器与扩展版本、字幕语言、翻译模式和复现步骤。有帮助时可附公开视频链接，请勿上传个人信息。
 
-欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.8.1 更新说明](docs/releases/v3.8.1.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
+欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.8.2 更新说明](docs/releases/v3.8.2.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
 
 ## 致谢与许可
 
