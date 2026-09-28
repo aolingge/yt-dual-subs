@@ -116,6 +116,7 @@ input:focus-visible,
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .ytds-prev-orig  { color: #ffffff; font-size: 11px; }
+.ytds-prev.ytds-fixed-width .ytds-prev-line { width: 100%; max-width: 100%; box-sizing: border-box; }
 .ytds-prev-trans { color: #ffe98a; font-size: 12px; }
 
 /* ============================ CARDS ============================ */

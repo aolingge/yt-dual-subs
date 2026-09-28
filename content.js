@@ -74,6 +74,7 @@
     backend: "tlang",            // "tlang" | "gtx" | "fast"
     order: "orig-top",           // which line on top: "orig-top" | "trans-top"
     rowGap: 4,                   // px between the two lines
+    overlayWidthPct: 0,          // 0 = automatic, otherwise 20–96% of the player
     position: "bottom",          // preset anchor: "top" | "center" | "bottom"
     offsetMs: 0,                 // subtitle sync nudge, ms (+ = show later)
     // study aids (see the "study mode" section below)
@@ -170,6 +171,8 @@
   let origEl = null;
   let transEl = null;
   let handleEl = null;
+  let resizeHandles = [];
+  let resizeGesture = null;
 
   // drag bookkeeping (listeners live on the handle, so they die with overlay)
   let dragging = false;
@@ -465,6 +468,7 @@
     overlay.appendChild(transEl);
     overlay.appendChild(origEl);
     buildHandle();                  // drag grip (its listeners die with overlay)
+    buildResizeHandles();
     player.appendChild(overlay);
     styleOverlay();
     if (typeof ResizeObserver !== "undefined") {
@@ -499,6 +503,7 @@
   }
 
   function onHandlePointerDown(e) {
+    if (resizeGesture) return;
     const player = getPlayer();
     if (!player) return;
     dragging = true;
@@ -583,6 +588,129 @@
     settings.posMode = "preset";
     applyPosition();
     saveSettings({ posMode: "preset" });
+  }
+
+  function configuredWidthPct() {
+    const value = Number(settings.overlayWidthPct);
+    return Number.isFinite(value) && value > 0
+      ? Math.max(20, Math.min(96, value)) : 0;
+  }
+
+  function applyOverlayWidth() {
+    if (!overlay) return;
+    const value = configuredWidthPct();
+    overlay.style.width = value ? value + "%" : "";
+    overlay.style.maxWidth = value ? "none" : "";
+    overlay.classList.toggle("ytds-fixed-width", !!value);
+    for (const handle of resizeHandles) {
+      handle.setAttribute("aria-valuenow", String(value || 92));
+      handle.setAttribute("aria-valuetext", value ? value + "%" : t("widthAuto", "自动"));
+    }
+  }
+
+  function resetOverlayWidth() {
+    resizeGesture = null;
+    overlay?.classList.remove("ytds-resizing");
+    settings.overlayWidthPct = 0;
+    applyOverlayWidth();
+    scheduleOverlayLayout();
+    saveSettings({ overlayWidthPct: 0 });
+  }
+
+  function buildResizeHandles() {
+    resizeHandles = [];
+    for (const side of ["left", "right"]) {
+      const handle = document.createElement("div");
+      handle.className = "ytds-resize-handle ytds-resize-" + side;
+      handle.tabIndex = 0;
+      handle.setAttribute("role", "separator");
+      handle.setAttribute("aria-orientation", "vertical");
+      handle.setAttribute("aria-valuemin", "20");
+      handle.setAttribute("aria-valuemax", "96");
+      handle.title = side === "left"
+        ? t("resizeLeft", "拖动左边调整字幕宽度 · 双击恢复默认")
+        : t("resizeRight", "拖动右边调整字幕宽度 · 双击恢复默认");
+      handle.setAttribute("aria-label", handle.title);
+      handle.addEventListener("pointerdown", (event) => {
+        if (dragging || resizeGesture || event.button !== 0) return;
+        const player = getPlayer();
+        const rect = player?.getBoundingClientRect?.();
+        const box = overlay?.getBoundingClientRect?.();
+        if (!rect?.width || !rect.height || !box) return;
+        hideWordLookup();
+        resizeGesture = {
+          handle, side, pointerId: event.pointerId, moved: false,
+          startX: event.clientX, startWidth: box.width,
+          fixedX: side === "left" ? box.right : box.left,
+          yPct: settings.posMode === "custom" ? clampPct(settings.posYpct)
+            : clampPct((box.top + box.height / 2 - rect.top) / rect.height * 100)
+        };
+        overlay.classList.add("ytds-resizing");
+        try { handle.setPointerCapture(event.pointerId); } catch (_e) { /* ignore */ }
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      handle.addEventListener("pointermove", onResizePointerMove);
+      handle.addEventListener("pointerup", finishResize);
+      handle.addEventListener("pointercancel", finishResize);
+      handle.addEventListener("lostpointercapture", finishResize);
+      handle.addEventListener("dblclick", (event) => {
+        event.preventDefault(); event.stopPropagation(); resetOverlayWidth();
+      });
+      handle.addEventListener("click", (event) => event.stopPropagation());
+      handle.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        const rect = getPlayer()?.getBoundingClientRect?.();
+        if (!rect?.width || !overlay) return;
+        const current = configuredWidthPct() || overlay.offsetWidth / rect.width * 100;
+        const direction = (event.key === "ArrowRight" ? 1 : -1) * (side === "right" ? 1 : -1);
+        settings.overlayWidthPct = Math.round(Math.max(20, Math.min(96, current + direction * 2)) * 10) / 10;
+        applyOverlayWidth(); scheduleOverlayLayout();
+        saveSettings({ overlayWidthPct: settings.overlayWidthPct });
+        event.preventDefault(); event.stopPropagation();
+      });
+      resizeHandles.push(handle);
+      overlay.appendChild(handle);
+    }
+  }
+
+  function onResizePointerMove(event) {
+    const gesture = resizeGesture;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    const delta = event.clientX - gesture.startX;
+    if (!gesture.moved && Math.abs(delta) < DRAG_THRESHOLD) return;
+    const player = getPlayer();
+    const rect = player?.getBoundingClientRect?.();
+    if (!rect?.width || !rect.height) return;
+    gesture.moved = true;
+    const room = gesture.side === "left"
+      ? gesture.fixedX - rect.left - 8 : rect.right - gesture.fixedX - 8;
+    const width = Math.max(rect.width * 0.2, Math.min(rect.width * 0.96, room,
+      gesture.startWidth + delta * (gesture.side === "left" ? -1 : 1)));
+    settings.overlayWidthPct = Math.round(width / rect.width * 1000) / 10;
+    const renderedWidth = rect.width * settings.overlayWidthPct / 100;
+    const center = gesture.fixedX + renderedWidth / 2 * (gesture.side === "left" ? -1 : 1);
+    settings.posMode = "custom";
+    settings.posXpct = clampPct((center - rect.left) / rect.width * 100);
+    settings.posYpct = gesture.yPct;
+    applyOverlayWidth();
+    applyPosition();
+    scheduleOverlayLayout();
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function finishResize(event) {
+    const gesture = resizeGesture;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
+    resizeGesture = null;
+    overlay?.classList.remove("ytds-resizing");
+    try { gesture.handle.releasePointerCapture(gesture.pointerId); } catch (_e) { /* ignore */ }
+    if (gesture.moved) {
+      saveSettings({ overlayWidthPct: settings.overlayWidthPct, posMode: "custom",
+        posXpct: settings.posXpct, posYpct: settings.posYpct });
+    }
+    event.stopPropagation();
   }
 
   // Reserve the native controls even while they are faded out, so showing them
@@ -677,7 +805,8 @@
     if (!rect || !rect.width || !rect.height) return;
     const edge = 14;
     const height = overlay.offsetHeight || 0;
-    const width = overlay.offsetWidth || Math.min(rect.width * 0.92, 1100);
+    const width = overlay.offsetWidth || (configuredWidthPct()
+      ? rect.width * configuredWidthPct() / 100 : Math.min(rect.width * 0.92, 1100));
     const bottom = rect.height - playerBottomInset(player, rect);
     const clampY = (center) => Math.max(edge + height / 2,
       Math.min(center, bottom - height / 2));
@@ -699,6 +828,7 @@
 
   function styleOverlay() {
     if (!overlay) return;
+    applyOverlayWidth();
 
     // spacing + order
     overlay.style.gap = (Number(settings.rowGap) || 0) + "px";
@@ -734,6 +864,8 @@
 
   function removeOverlay() {
     destroyWordPopup();
+    resizeGesture = null;
+    resizeHandles = [];
     if (overlayResizeObserver) { overlayResizeObserver.disconnect(); overlayResizeObserver = null; }
     if (overlayLayoutFrame) {
       window.cancelAnimationFrame?.(overlayLayoutFrame);

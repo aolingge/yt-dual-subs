@@ -46,7 +46,7 @@ function element() {
     },
     dispatch(type, extra = {}) {
       for (const fn of elementListeners[type] || []) {
-        fn({ type, target: this, stopPropagation() {}, ...extra });
+        fn({ type, target: this, stopPropagation() {}, preventDefault() {}, ...extra });
       }
     },
     setAttribute() {}, click() {}, remove() {}
@@ -136,7 +136,11 @@ async function mountContent(options = {}) {
       const el = element();
       Object.defineProperties(el, {
         offsetHeight: { get: () => el.id === 'ytds-overlay' ? overlayHeight : 0 },
-        offsetWidth: { get: () => el.id === 'ytds-overlay' ? Math.min(geometry.width * .92, 1100) : 0 }
+        offsetWidth: { get: () => {
+          if (el.id !== 'ytds-overlay') return 0;
+          const width = geometry.width * (parseFloat(el.style.width) || 92) / 100;
+          return el.style.maxWidth === 'none' ? width : Math.min(width, 1100);
+        } }
       });
       return el;
     },

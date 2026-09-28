@@ -9,6 +9,7 @@ const DEFAULTS = {
   backend: "tlang",            // "tlang" | "gtx" | "fast"
   order: "orig-top",           // "orig-top" | "trans-top"
   rowGap: 4,
+  overlayWidthPct: 0,          // 0 = automatic, otherwise 20–96% of the player
   position: "bottom",          // "top" | "center" | "bottom"
   offsetMs: 0,                 // subtitle sync nudge, ms (+ = show later)
   // study aids (see the "study mode" section below)
@@ -170,6 +171,8 @@ function paintPreview() {
   if (!ov || !o || !t) return;
 
   ov.style.flexDirection = state.order === "trans-top" ? "column" : "column-reverse";
+  ov.style.width = state.overlayWidthPct > 0 ? state.overlayWidthPct + "%" : "";
+  ov.classList.toggle("ytds-fixed-width", state.overlayWidthPct > 0);
   ov.style.gap = (Number(state.rowGap) || 0) / 2 + "px"; // preview is ~half scale
 
   // scale font sizes to the compact preview strip (~half of player px)
@@ -380,6 +383,7 @@ function bindUI() {
   if (!listedTarget) $("targetLangCustom").value = state.targetLang;
   $("rowGap").value = state.rowGap;
   $("rowGapV").textContent = state.rowGap + "px";
+  paintWidthControl();
   $("offsetMs").value = state.offsetMs;
   $("offsetMsV").textContent = formatOffset(state.offsetMs);
   $("karaoke").checked = state.karaoke;
@@ -389,6 +393,12 @@ function bindUI() {
   paintExportSeg();
   bindLineControls();
   paintPreview();
+}
+
+function paintWidthControl() {
+  const value = Number(state.overlayWidthPct) || 0;
+  $("overlayWidthPct").value = value > 0 ? value : 92;
+  $("overlayWidthPctV").textContent = value > 0 ? value + "%" : t("widthAuto", "自动");
 }
 
 // ---- wire events ---------------------------------------------------------
@@ -453,6 +463,13 @@ function wire() {
     }));
   $("resetPos").addEventListener("click", () => {
     setKey("posMode", "preset"); paintSegs();
+  });
+  $("overlayWidthPct").addEventListener("input", (event) => {
+    setKey("overlayWidthPct", Number(event.target.value));
+    paintWidthControl();
+  });
+  $("resetWidth").addEventListener("click", () => {
+    setKey("overlayWidthPct", 0); paintWidthControl();
   });
 
   // row gap
@@ -628,6 +645,11 @@ function showVersion() {
 }
 
 // ---- boot ----------------------------------------------------------------
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "sync" || !("overlayWidthPct" in changes)) return;
+  state.overlayWidthPct = changes.overlayWidthPct.newValue || 0;
+  paintWidthControl(); paintPreview();
+});
 applyI18n();                       // localize static markup before first paint
 chrome.storage.sync.get(DEFAULTS, (got) => {
   state = { ...DEFAULTS, ...got };

@@ -61,6 +61,46 @@ html.ytds-active .caption-window {
 }
 
 .ytds-line:empty { display: none; }
+#ytds-overlay.ytds-fixed-width .ytds-line { width: 100%; padding-left: 18px; padding-right: 18px; }
+#ytds-overlay.ytds-resizing .ytds-line { user-select: none; }
+
+/* Side grips are separate from selectable text and stay inside the box even
+   when very long captions need an internal scrollbar. */
+.ytds-resize-handle {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 12px;
+  height: 36px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, .6);
+  border-radius: 5px;
+  background: rgba(8, 8, 8, .8);
+  cursor: ew-resize;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  opacity: 0;
+  z-index: 2;
+  transition: opacity .15s ease;
+}
+.ytds-resize-handle::after {
+  content: "";
+  position: absolute;
+  inset: 7px 3px;
+  border-left: 1px solid #ddd;
+  border-right: 1px solid #ddd;
+}
+.ytds-resize-left { left: 0; }
+.ytds-resize-right { right: 0; }
+#movie_player:not(.ytp-autohide):hover #ytds-overlay .ytds-resize-handle,
+.html5-video-player:not(.ytp-autohide):hover #ytds-overlay .ytds-resize-handle,
+#ytds-overlay.ytds-resizing .ytds-resize-handle,
+.ytds-resize-handle:focus-visible { opacity: .95; }
+#movie_player:not(.ytp-autohide):hover #ytds-overlay,
+.html5-video-player:not(.ytp-autohide):hover #ytds-overlay,
+#ytds-overlay.ytds-resizing { outline: 1px dashed rgba(255, 255, 255, .25); outline-offset: 2px; }
+.ytds-resize-handle:focus-visible { outline: 2px solid #3ea6ff; }
 
 #ytds-overlay.ytds-word-lookup-on .ytds-orig .ytds-lookup-word:hover {
   text-decoration: underline;
