@@ -238,6 +238,9 @@
   let wordSpans = null;         // karaoke spans of the original line, or null
   let wordTimingSource = "waiting";
   let wordTimes = null;         // parallel word start times (raw track ms)
+  let wordEnds = null;          // audio-only word ends; silence has no active word
+  let audioRecord = null;
+  let audioCacheIdentity = "";
   let activeWordIdx = -1;       // highlighted word index
   let overlayResizeObserver = null;
   let overlayLayoutFrame = 0;
@@ -1006,9 +1009,10 @@
   function clearWordSpans() {
     wordSpans = null;
     wordTimes = null;
+    wordEnds = null;
     activeWordIdx = -1;
     wordTimingSource = "waiting";
-    if (overlay) overlay.classList.remove("ytds-karaoke-estimated");
+    if (overlay) overlay.classList.remove("ytds-karaoke-estimated", "ytds-karaoke-audio");
   }
 
   function setOriginal(text) {
@@ -1235,21 +1239,25 @@
     clearWordSpans();
     wordTimingSource = plan.source;
     overlay.classList.toggle("ytds-karaoke-estimated", plan.source === "estimated");
-    origEl.setAttribute("data-ytds-timing-label", t("karaokeEstimatedBadge", "近似跟读"));
+    overlay.classList.toggle("ytds-karaoke-audio", plan.source === "audio");
+    origEl.setAttribute("data-ytds-timing-label", plan.source === "audio"
+      ? t("karaokeAudioBadge", "音频对齐") : t("karaokeEstimatedBadge", "近似跟读"));
     origEl.textContent = "";              // drop the previous text/spans
     const spans = [];
     const times = [];
+    const ends = [];
     for (const p of plan.pieces) {
       for (const part of segmentCaptionWords(p.u)) {
         const span = document.createElement("span");
         span.className = part.word ? "ytds-w ytds-lookup-word" : "ytds-lookup-sep";
         span.textContent = part.text;
         origEl.appendChild(span);
-        if (part.word) { spans.push(span); times.push(p.t); }
+        if (part.word) { spans.push(span); times.push(p.t); ends.push(p.e); }
       }
     }
     wordSpans = spans;
     wordTimes = times;
+    wordEnds = ends;
     updateEmptyState();
   }
 
@@ -1260,7 +1268,7 @@
     for (let i = 0; i < wordTimes.length; i++) {
       if (wordTimes[i] <= t) ans = i; else break;
     }
-    return ans;
+    return ans >= 0 && Number.isFinite(wordEnds?.[ans]) && t >= wordEnds[ans] ? -1 : ans;
   }
 
   function highlightWord(k) {
@@ -1933,6 +1941,48 @@
   }
 
   // ---- per-video cue cache (memory only) -----------------------------------
+  function mergeAudioTiming(record) {
+    if (!record || record.videoId !== currentVideoId || record.sourceLang !== cueSourceLang ||
+        !Array.isArray(record.segments) || record.segments.length > 5000 || !displayCueList) return 0;
+    if (!audioRecord || audioRecord.videoId !== record.videoId || audioRecord.sourceLang !== record.sourceLang) {
+      audioRecord = { videoId: record.videoId, sourceLang: record.sourceLang, segments: [] };
+    }
+    const combined = new Map(audioRecord.segments.map(s => [s.start + "\0" + s.text, s]));
+    for (const s of record.segments) if (s && typeof s.text === "string") combined.set(s.start + "\0" + s.text, s);
+    audioRecord.segments = [...combined.values()].slice(-5000);
+    const count = window.YtdsWordTiming.applyAudio(displayCueList, record.segments, cueSourceLang);
+    if (count && settings.karaoke) {
+      const video = getVideo();
+      const time = video ? video.currentTime * 1000 + (Number(settings.offsetMs) || 0) : 0;
+      const idx = video ? activeCueIdxAt(time) : -1;
+      if (idx >= 0 && idx === activeCueIdx && lineText(origEl) === displayCueList[idx].text) {
+        setOriginalWithWords(displayCueList[idx]);
+        highlightWord(wordIdxAt(time));
+      }
+    }
+    return count;
+  }
+
+  function restoreAudioTiming() {
+    if (audioRecord?.videoId === currentVideoId && audioRecord.sourceLang === cueSourceLang) {
+      window.YtdsWordTiming.applyAudio(displayCueList, audioRecord.segments, cueSourceLang);
+    }
+    const identity = currentVideoId + "\0" + cueSourceLang;
+    if (audioCacheIdentity === identity || !extAlive()) return;
+    audioCacheIdentity = identity;
+    const id = currentVideoId, language = cueSourceLang;
+    try {
+      chrome.storage.local.get("audioTimingCacheV1", (saved) => {
+        if (!extAlive() || chrome.runtime.lastError || currentVideoId !== id || cueSourceLang !== language) return;
+        const records = saved && saved.audioTimingCacheV1;
+        if (Array.isArray(records)) {
+          const record = records.find(r => r?.videoId === id && r.sourceLang === language);
+          if (record) mergeAudioTiming(record);
+        }
+      });
+    } catch (_e) { /* optional cached audio must never hold up captions */ }
+  }
+
   // YouTube re-uses one document for every navigation, but reloading a video we
   // opened earlier still costs a full timedtext round-trip. Keeping the parsed
   // cues for the last few videos lets that case paint immediately; inject.js
@@ -1993,6 +2043,7 @@
       : null;
     cueVideoId = currentVideoId;
     cueSourceLang = cached.sourceLang || "auto";
+    restoreAudioTiming();
     // Still waiting on YouTube whenever the cached set had no translation yet or
     // the target language changed; that also keeps gtx prefetch behind the
     // "only after a visible wait" rule.
@@ -2042,6 +2093,7 @@
       : null;
     cueVideoId = data.videoId || currentVideoId;
     cueSourceLang = data.sourceLang || "auto";
+    restoreAudioTiming();
     usedVideoCache = false;         // fresh data from the page has taken over
 
     if (!cueList.length) { onNoCues(data); return; }
@@ -2313,6 +2365,27 @@
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (!msg) return;
+    if (msg.type === "audioContext") {
+      if (!settings.enabled || !displayCueList?.length || cueVideoId !== currentVideoId) {
+        sendResponse({ ok: false, reason: "nocue" });
+        return;
+      }
+      sendResponse({ ok: true, videoId: currentVideoId, sourceLang: cueSourceLang,
+        title: videoTitle(), positionMs: (getVideo()?.currentTime || 0) * 1000,
+        cues: displayCueList.filter(c => !window.YtdsWordTiming.captionPieces(c, cueSourceLang))
+          .map(c => ({ start: c.start, dur: c.end - c.start, text: c.text,
+            tokens: window.YtdsWordTiming.tokens(c.text, cueSourceLang).map(w => w.text) })) });
+      return;
+    }
+    if (msg.type === "applyAudioTiming") {
+      if (msg.record?.videoId !== currentVideoId || msg.record?.sourceLang !== cueSourceLang) {
+        sendResponse({ ok: false, reason: "changed" });
+      } else {
+        const count = mergeAudioTiming(msg.record);
+        sendResponse({ ok: true, count });
+      }
+      return;
+    }
     if (msg.type === "studyCues") {
       if (!displayCueList || !displayCueList.length) {
         sendResponse({ ok: false, reason: "nocue" });

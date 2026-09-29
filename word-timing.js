@@ -47,14 +47,20 @@
       previous = w.t;
       const words = tokens(String(w.u || ""), language);
       if (words.length > 1) return null;
-      if (words.length) timed.push({ key: words[0].key, t: w.t });
+      if (words.length) timed.push({ key: words[0].key, t: w.t, e: w.e });
     }
     if (timed.length !== parts.length ||
         parts.some((p, i) => p.key !== timed[i].key)) return null;
     const end = Number.isFinite(cue.end) ? cue.end : cue.start + cue.dur;
     if (!Number.isFinite(cue.start) || !Number.isFinite(end) ||
         timed.some((w) => w.t < cue.start - 100 || w.t >= end)) return null;
-    return piecesAt(text, parts, timed.map((w) => w.t));
+    const pieces = piecesAt(text, parts, timed.map((w) => w.t));
+    if (cue.wordTimingSource === "audio") {
+      if (timed.some((w, i) => !Number.isFinite(w.e) || w.e <= w.t || w.e > end ||
+          (i + 1 < timed.length && w.e > timed[i + 1].t))) return null;
+      pieces.forEach((p, i) => { p.e = timed[i].e; });
+    }
+    return pieces;
   }
 
   // Speech duration tracks syllables, not characters: German compounds are long
@@ -220,7 +226,36 @@
     return count;
   }
 
-  const api = Object.freeze({ tokens, syllables, captionPieces, estimate, speakingRate, align });
+  // Audio results must describe this exact sentence/window. Native and matched
+  // caption timings keep priority. Partial/weak/foreign results never replace
+  // the existing complete sentence with invented timestamps.
+  function applyAudio(cues, segments, language) {
+    if (!Array.isArray(cues) || !Array.isArray(segments) || segments.length > 5000) return 0;
+    const byStart = new Map();
+    for (const segment of segments) {
+      if (!segment || typeof segment.text !== "string" || segment.text.length > MAX_TEXT ||
+          !Number.isFinite(segment.start) || !Number.isFinite(segment.dur) || segment.dur <= 0 ||
+          !Array.isArray(segment.words) || !segment.words.length || segment.words.length > 256 ||
+          segment.words.some((w) => !w || !Number.isFinite(w.score) || w.score < 0.12 || w.score > 1)) continue;
+      const end = segment.start + segment.dur;
+      const candidate = { ...segment, end, wordTimingSource: "audio" };
+      if (!captionPieces(candidate, language)) continue;
+      byStart.set(segment.start + "\0" + end + "\0" + segment.text, candidate);
+    }
+    let count = 0;
+    for (const cue of cues) {
+      if (captionPieces(cue, language)) continue;
+      const end = Number.isFinite(cue.end) ? cue.end : cue.start + cue.dur;
+      const candidate = byStart.get(cue.start + "\0" + end + "\0" + cue.text);
+      if (!candidate) continue;
+      cue.words = candidate.words.map((w) => ({ t: w.t, e: w.e, u: w.u, score: w.score }));
+      cue.wordTimingSource = "audio";
+      count++;
+    }
+    return count;
+  }
+
+  const api = Object.freeze({ tokens, syllables, captionPieces, estimate, speakingRate, align, applyAudio });
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.YtdsWordTiming = api;
 })(typeof window === "object" ? window : globalThis);

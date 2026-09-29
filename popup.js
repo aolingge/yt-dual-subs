@@ -324,6 +324,7 @@ async function refreshStatus() {
   const labels = {
     captions: t("karaokeStatusCaptions", "跟读：使用原字幕词时间"),
     automatic: t("karaokeStatusAutomatic", "跟读：已匹配同语言自动字幕词时间"),
+    audio: t("karaokeStatusAudio", "跟读：使用音频对齐词时间"),
     estimated: t("karaokeStatusEstimated", "近似跟读：按音节、标点和本视频语速估算，不代表精确语音时间"),
     unavailable: t("karaokeStatusUnavailable", "此句无可靠词时间，显示完整句子"),
     waiting: t("karaokeStatusWaiting", "跟读：等待带有时间的原文字幕"),
@@ -543,6 +544,18 @@ function wire() {
   document.querySelectorAll("#revealMode button").forEach((b) =>
     b.addEventListener("click", () => { setKey("revealMode", b.dataset.val); paintSegs(); }));
   $("karaoke").addEventListener("change", (e) => setKey("karaoke", e.target.checked));
+  $("audioAlignmentBtn").addEventListener("click", async () => {
+    const tab = await getActiveTab();
+    const context = tab?.id != null ? await sendToTab(tab.id, { type: "audioContext" }) : null;
+    if (!context?.ok) {
+      showLiveMsg(t("liveNoCue", "这个视频还没有字幕：先播放几秒，或换一个视频。"), "err");
+      return;
+    }
+    chrome.tabs.create({ url: chrome.runtime.getURL("alignment.html") + "?tab=" + tab.id }, () => {
+      if (chrome.runtime.lastError) showLiveMsg(t("liveFailed", "操作没生效，刷新页面后再试一次。"), "err");
+      else window.close();
+    });
+  });
   $("karaokeApproximate").addEventListener("change", (e) => setKey("karaokeApproximate", e.target.checked));
   $("karaokeBg").addEventListener("input", (e) => setKey("karaokeBg", e.target.value));
   $("karaokeTextColor").addEventListener("input", (e) => setKey("karaokeTextColor", e.target.value));

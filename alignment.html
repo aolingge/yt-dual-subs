@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>YT Dual Subs · Audio alignment</title>
+  <link rel="stylesheet" href="alignment.css">
+</head>
+<body>
+  <main>
+    <p class="brand">YT DUAL SUBS</p>
+    <h1 data-i18n="audioOpen">音频对齐跟读</h1>
+    <p class="intro" data-i18n="audioIntro">用视频原文和音频补出词时间，整句保持显示。支持德语和英语；模型在本机运行。</p>
+    <section aria-labelledby="videoHeading">
+      <h2 id="videoHeading" data-i18n="audioVideo">当前视频</h2>
+      <p id="videoTitle"></p>
+      <p id="cueInfo" class="muted"></p>
+      <label for="language" data-i18n="audioLanguage">音频语言</label>
+      <select id="language"><option value="de">Deutsch</option><option value="en">English</option></select>
+    </section>
+    <section aria-labelledby="sourceHeading">
+      <h2 id="sourceHeading" data-i18n="audioSource">开始分析</h2>
+      <p data-i18n="audioSourceHint">从当前观看位置优先处理。首次需下载约 360 MB 的模型；之后可复用模型和词时间。分析期间可以继续看视频。</p>
+      <div class="actions">
+        <button id="start" data-i18n="audioStart">获取视频音频并对齐</button>
+        <button id="local" class="secondary" data-i18n="audioLocal">选择本地音频或视频</button>
+        <button id="cancel" class="secondary" data-i18n="audioCancel" hidden>停止分析</button>
+      </div>
+      <input id="audioFile" type="file" accept="audio/*,video/*,.wav,.mp3,.m4a,.webm,.mp4,.ogg,.flac" hidden>
+      <p class="muted" data-i18n="audioLocalHint">本地文件必须与当前视频对应，并从视频的 0:00 开始。匿名音频获取失败时可用此方式；文件只交给本机程序。</p>
+      <progress id="progress" max="100" value="0" hidden></progress>
+      <p id="status" role="status" aria-live="polite"></p>
+      <p id="delivery" class="muted"></p>
+    </section>
+    <details id="setup">
+      <summary data-i18n="audioSetup">准备本机处理程序</summary>
+      <p data-i18n="audioSetupHint">在扩展文件夹中双击 tools → Start-AudioAlignment.cmd。它会准备独立 Python 环境并启动本机程序；需要 Python 3.10+ 和 FFmpeg。首次下载完成后，回到此页开始分析。</p>
+      <p data-i18n="audioPrivacy">此功能只连接 127.0.0.1；字幕和音频在本机处理。程序会从 YouTube 获取公开音频、从 Hugging Face 下载模型，不读取浏览器登录信息。</p>
+      <a href="docs/AUDIO_ALIGNMENT.md" target="_blank" rel="noopener" data-i18n="audioGuide">查看使用说明</a>
+    </details>
+    <p class="footnote" data-i18n="audioAccuracy">音频对齐仍可能有误差。原文与声音不一致、数字或低置信度的句子会保留原有跟读方式。保持此页打开可接收新结果，已保存的结果刷新视频后仍可使用。</p>
+  </main>
+  <script src="settings.js"></script>
+  <script src="alignment.js"></script>
+</body>
+</html>

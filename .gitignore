@@ -6,3 +6,8 @@ desktop.ini
 
 # internal dev notes (not part of the published extension)
 HANDOFF.md
+
+# Optional audio helper: environments, downloaded models and personal media.
+tools/audio-alignment/.venv/
+__pycache__/
+*.pyc
