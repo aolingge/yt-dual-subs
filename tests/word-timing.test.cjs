@@ -510,3 +510,99 @@ test('turning highlighting off discards a pending donor without disturbing origi
   assert.equal(b.posted.length, 1);
   assert.equal(b.posted[0].cues[0].text, 'Hallo schöne Welt.');
 });
+
+// ---- local pace ------------------------------------------------------------
+// Seven one-syllable German words, so a word interval of N ms means exactly
+// N ms per syllable and a region's real pace is known instead of assumed.
+const PACED_WORDS = 'Tor Haus Buch Tag Licht Stein Wand'.split(' ');
+const pacedCue = (start, stepMs, { dur = 3000, suffix = '' } = {}) => ({
+  start, dur, text: PACED_WORDS.join(' ') + suffix,
+  words: PACED_WORDS.map((u, i) => ({ t: start + i * stepMs, u: i ? u : u }))
+});
+// Slow first minute, fast second minute: the kind of change a single
+// video-wide rate cannot follow. `omit` leaves a slot free for an untimed cue.
+function twoSpeedTrack(omit = []) {
+  const cues = [];
+  for (let start = 0; start < 120000; start += 6000) {
+    if (!omit.includes(start)) cues.push(pacedCue(start, start < 60000 ? 300 : 150));
+  }
+  return cues;
+}
+
+test('the measured pace follows a speaker who changes speed during the video', () => {
+  const track = twoSpeedTrack();
+  const measured = timing.pace(track, 'de');
+  assert.ok(measured.samples.length > 20, 'every word interval is collected');
+  assert.equal(Math.round(measured.global), 300,
+    'the video-wide median cannot follow the change, which is why it is only the fallback');
+  const slow = timing.localRate(measured, 30000);
+  const fast = timing.localRate(measured, 90000);
+  assert.ok(Math.abs(slow - 300) <= 30, `the slow region is measured locally, got ${slow}`);
+  assert.ok(Math.abs(fast - 150) <= 15, `the fast region is measured locally, got ${fast}`);
+  // A window straddling the change holds both rates; the middle reports the
+  // dominant nearby pace instead of inventing a value between them.
+  const boundary = timing.localRate(measured, 60000);
+  assert.ok(boundary === 300 || boundary === 150,
+    `a window over the change picks the dominant rate, got ${boundary}`);
+  const early = timing.localRate(measured, 42000);
+  assert.ok(Math.abs(early - 300) <= 30, `still slow just before the change, got ${early}`);
+  const late = timing.localRate(measured, 78000);
+  assert.ok(Math.abs(late - 150) <= 15, `already fast just after the change, got ${late}`);
+});
+
+test('a long silence inside one cue cannot move the local pace', () => {
+  const track = twoSpeedTrack();
+  // Four seconds of silence inside one cue that no punctuation marks: one
+  // interval is an order of magnitude longer than the speaker's real pace.
+  const outlier = pacedCue(30000, 300, { dur: 12000 });
+  for (let i = 3; i < outlier.words.length; i++) outlier.words[i].t += 4000;
+  const clean = timing.localRate(timing.pace(track, 'de'), 30000);
+  const noisy = timing.localRate(timing.pace(track.concat([outlier]), 'de'), 30000);
+  assert.ok(Math.abs(noisy - clean) <= 20,
+    `the per-interval middle absorbs the outlier, ${clean} became ${noisy}`);
+});
+
+test('the local pace widens once and then gives up so the caller can fall back', () => {
+  const single = pacedCue(0, 200);
+  const measured = timing.pace([single], 'de');
+  assert.equal(timing.localRate(measured, 0), 200, 'one nearby cue is enough evidence');
+  assert.equal(timing.localRate(measured, 30000), 200, 'a wide window still reaches it');
+  assert.equal(timing.localRate(measured, 200000), null, 'too far away to be local');
+  assert.equal(timing.localRate(null, 0), null, 'nothing measured yet');
+  assert.equal(timing.localRate(timing.pace([], 'de'), 0), null);
+});
+
+test('an untimed sentence is estimated at the pace measured around it', async () => {
+  const words = PACED_WORDS.join(' ');
+  const slow = { start: 30000, dur: 3000, text: words };
+  const fast = { start: 96000, dur: 3000, text: words };
+  const player = await mountContent({ cues: twoSpeedTrack([30000, 96000]).concat([slow, fast]) });
+  player.at(30.75);
+  const slowIdx = player.activeWordIdx();
+  player.at(96.75);
+  const fastIdx = player.activeWordIdx();
+  assert.equal(player.status().wordTiming, 'estimated');
+  assert.ok(fastIdx > slowIdx,
+    `the fast sentence reaches further into the line by the same moment, ${slowIdx} vs ${fastIdx}`);
+});
+
+test('the video pace is measured once per caption track, not for every sentence', async () => {
+  const words = PACED_WORDS.join(' ');
+  const untimed = (start) => ({ start, dur: 3000, text: words });
+  const cues = twoSpeedTrack([30000, 36000, 96000])
+    .concat([untimed(30000), untimed(36000), untimed(96000)]);
+  const player = await mountContent({ cues });
+  const real = player.timing;
+  let calls = 0;
+  player.timing = Object.freeze({ ...real,
+    pace(...args) { calls += 1; return real.pace(...args); } });
+  player.at(30.5);
+  player.at(36.5);
+  player.at(96.5);
+  assert.ok(calls <= 1, `playback must not rescan the track, saw ${calls} scans`);
+  // A new caption track is a new measurement, not the previous video's pace.
+  const replaced = twoSpeedTrack([30000]).concat([untimed(30000)]);
+  player.sendCues({ cues: replaced, aligned: true, wordTimingUpdate: true });
+  player.at(30.5);
+  assert.equal(calls, 2, 'a replaced track is measured again');
+});

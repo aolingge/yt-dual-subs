@@ -1203,16 +1203,29 @@
   // ---- karaoke: word-level highlight ---------------------------------------
   // Real caption offsets take priority. Estimation is visibly labeled and is
   // computed only for rendering, so exports and cached source times stay intact.
-  // The video's own pace, measured once from the cues that do carry real word
-  // times, keeps the estimate for untimed cues at this speaker's speed.
+  // The video's own pace keeps the estimate for untimed cues at this speaker's
+  // speed. The measured intervals are collected once per caption track; each
+  // sentence then prefers the pace measured near it and falls back to the
+  // video-wide rate and finally to the language default.
   let rateMemo = { list: null, lang: null, value: null };
-  function estimatedPieces(clean) {
+  function videoPace() {
     const timing = window.YtdsWordTiming;
     if (rateMemo.list !== cueList || rateMemo.lang !== cueSourceLang) {
       rateMemo = { list: cueList, lang: cueSourceLang,
-        value: timing.speakingRate(cueList, cueSourceLang) };
+        value: timing.pace ? timing.pace(cueList, cueSourceLang) : null };
     }
-    const options = rateMemo.value ? { syllableMs: rateMemo.value } : undefined;
+    return rateMemo.value;
+  }
+  function localSyllableMs(clean) {
+    const timing = window.YtdsWordTiming;
+    const measured = videoPace() || { samples: [], global: null };
+    const local = timing.localRate ? timing.localRate(measured, clean.start) : null;
+    return local || measured.global || null;
+  }
+  function estimatedPieces(clean) {
+    const timing = window.YtdsWordTiming;
+    const syllableMs = localSyllableMs(clean);
+    const options = syllableMs ? { syllableMs } : undefined;
     return timing.estimate(clean, cueSourceLang, options);
   }
 

@@ -379,7 +379,11 @@ async function mountContent(options = {}) {
       for (const fn of pending) fn();
       return api;
     },
-    settle() { return new Promise(setImmediate); }
+    settle() { return new Promise(setImmediate); },
+    // The in-page copy of the word-timing module the content script calls into,
+    // so a test can read it or wrap it to count calls.
+    get timing() { return window.YtdsWordTiming; },
+    set timing(value) { window.YtdsWordTiming = value; }
   };
 
   if (!skipCues) post({ type: 'cues', aligned, cues, tcues, translationPending });

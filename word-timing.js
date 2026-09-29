@@ -184,34 +184,109 @@
     return piecesAt(text, parts, times);
   }
 
+  function medianOf(values) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    return sorted.length ? sorted[sorted.length >> 1] : null;
+  }
+
+  function clampRate(value) {
+    return Number.isFinite(value) ? Math.max(90, Math.min(500, value)) : null;
+  }
+
+  // One cue's measured word intervals: the time between two known word starts
+  // together with the syllables spoken in that span. Caption end can include
+  // seconds of silence, so the last word's duration stays unknown, and a
+  // punctuation gap includes a pause rather than the speaker's word pace.
+  function cueIntervals(cue, language) {
+    const pieces = captionPieces(cue, language);
+    if (!pieces) return null;
+    const parts = tokens(String(cue.text || ""), language);
+    const intervals = [];
+    for (let i = 0; i + 1 < parts.length; i++) {
+      const gap = cue.text.slice(parts[i].index + parts[i].text.length, parts[i + 1].index);
+      if (pauseAfter(gap, parts[i].text)) continue;
+      const elapsed = pieces[i + 1].t - pieces[i].t;
+      if (!(elapsed > 0)) continue;
+      intervals.push({ t: pieces[i].t, ms: elapsed, syl: syllables(parts[i].text, language) });
+    }
+    return intervals;
+  }
+
+  // The middle of the samples, with values far from it dropped first: one long
+  // gap or an unusual cue must not drag the estimate, while a genuine rate
+  // change inside the window still shows up as a different middle.
+  function robustRate(samples) {
+    const values = [];
+    for (const sample of samples) if (sample.ms > 0) values.push(sample.ms);
+    if (!values.length) return null;
+    const middle = medianOf(values);
+    const kept = values.filter((value) => value >= middle / 2.5 && value <= middle * 2.5);
+    return clampRate(medianOf(kept.length ? kept : values));
+  }
+
   // Measure this video's own pace from cues that already carry real word times,
   // so untimed cues in the same video are estimated at the speaker's speed.
   function speakingRate(cues, language) {
     const rates = [];
     for (const cue of Array.isArray(cues) ? cues : []) {
       if (rates.length >= 60) break;
-      const pieces = captionPieces(cue, language);
-      if (!pieces) continue;
-      const parts = tokens(String(cue.text || ""), language);
-      // Caption end can include seconds of silence. Measure only intervals
-      // between known word starts, leaving the final word's duration unknown.
-      // Punctuation gaps include pauses rather than the speaker's word pace.
+      const intervals = cueIntervals(cue, language);
+      if (!intervals) continue;
       let duration = 0, count = 0;
-      for (let i = 0; i + 1 < parts.length; i++) {
-        const gap = cue.text.slice(parts[i].index + parts[i].text.length, parts[i + 1].index);
-        if (pauseAfter(gap, parts[i].text)) continue;
-        const elapsed = pieces[i + 1].t - pieces[i].t;
-        if (!(elapsed > 0)) continue;
-        duration += elapsed;
-        count += syllables(parts[i].text, language);
+      for (const interval of intervals) {
+        duration += interval.ms;
+        count += interval.syl;
       }
       if (count < 4) continue;
       rates.push(duration / count);
     }
     if (rates.length < 3) return null;
-    rates.sort((a, b) => a - b);
-    const median = rates[rates.length >> 1];
-    return Number.isFinite(median) ? Math.max(90, Math.min(500, median)) : null;
+    return clampRate(medianOf(rates));
+  }
+
+  // How close to the current sentence a measured interval still counts as
+  // local, and how much evidence a window needs before it is trusted. The
+  // harness in tests/word-timing.test.cjs measures how well a window of this
+  // size follows a speaker who changes speed; the numbers are a sanity limit
+  // chosen from that comparison, not a claim to be optimal.
+  const LOCAL_WINDOW_MS = 12000;
+  const LOCAL_WIDE_MS = 45000;
+  const LOCAL_MIN_SAMPLES = 6;
+
+  // Every measured word interval of the video in time order, plus the
+  // video-wide rate. Built once per caption track and queried per sentence, so
+  // playback never rescans the whole track for one frame.
+  function pace(cues, language) {
+    const samples = [];
+    for (const cue of Array.isArray(cues) ? cues : []) {
+      const intervals = cueIntervals(cue, language);
+      if (!intervals) continue;
+      for (const interval of intervals) {
+        const ms = interval.ms / interval.syl;
+        if (Number.isFinite(ms) && ms > 0) samples.push({ t: interval.t, ms });
+      }
+    }
+    samples.sort((a, b) => a.t - b.t);
+    return { samples, global: speakingRate(cues, language) };
+  }
+
+  // The speaker's pace around one point in the video, so an estimate follows a
+  // speaker who speeds up or slows down. Nearby intervals win; a window with
+  // too little evidence widens once and then gives up, leaving the caller to
+  // fall back to the video-wide rate and then to the language default.
+  function localRate(videoPace, time, options) {
+    if (!videoPace || !Array.isArray(videoPace.samples) || !Number.isFinite(time)) return null;
+    const opts = options || {};
+    const windows = [Number.isFinite(opts.window) ? opts.window : LOCAL_WINDOW_MS,
+      Number.isFinite(opts.wideWindow) ? opts.wideWindow : LOCAL_WIDE_MS];
+    const min = Number.isFinite(opts.minSamples) ? opts.minSamples : LOCAL_MIN_SAMPLES;
+    for (const span of windows) {
+      const near = videoPace.samples.filter((sample) => Math.abs(sample.t - time) <= span);
+      if (near.length < min) continue;
+      const rate = robustRate(near);
+      if (rate !== null) return rate;
+    }
+    return null;
   }
 
   function lowerBound(words, time) {
@@ -438,7 +513,7 @@
     return count;
   }
 
-  const api = Object.freeze({ tokens, syllables, captionPieces, estimate, speakingRate, align, applyAudio });
+  const api = Object.freeze({ tokens, syllables, captionPieces, estimate, speakingRate, pace, localRate, align, applyAudio });
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.YtdsWordTiming = api;
 })(typeof window === "object" ? window : globalThis);
