@@ -141,13 +141,18 @@ html.ytds-active.ytds-rendering .caption-window {
 }
 
 /* ---- study mode: karaoke + translation reveal --------------------------- */
-/* The sentence keeps its normal look; only the word being spoken gets a soft
-   box behind it (no colour change, so nothing "pops" word by word). */
+/* Highlight only the current word. An opaque fill and two contrasting rings
+   keep it readable over bright video; opacity never dims the word itself. */
 .ytds-w { transition: background-color 0.08s linear; }
 .ytds-w-on {
-  background: rgba(255, 214, 92, 0.30);
+  background: var(--ytds-karaoke-bg, rgba(255, 214, 92, 0.95));
+  color: var(--ytds-karaoke-color, #161616);
+  text-shadow: none;
   border-radius: 3px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 0 0 2px var(--ytds-karaoke-border, #ffd65c),
+              0 0 0 3px rgba(0, 0, 0, 0.9);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* "listen first" mode: keep the translation hidden until the pointer is over

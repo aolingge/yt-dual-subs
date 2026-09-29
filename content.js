@@ -84,6 +84,9 @@
     studyRate: 0.75,             // playback rate used while repeating a sentence
     karaoke: true,               // prefer caption word times; optional labeled estimate
     karaokeApproximate: true,
+    karaokeBg: "#ffd65c",
+    karaokeTextColor: "#161616",
+    karaokeOpacity: 0.95,
     wordLookup: true,            // translate a word after a short mouse hover
     revealMode: "always",        // translation visibility: "always" | "hover" | "manual"
     autoCaptions: true,          // turn YouTube's own CC on for you when the page loads
@@ -846,6 +849,9 @@
   function styleOverlay() {
     if (!overlay) return;
     applyOverlayWidth();
+    overlay.style.setProperty("--ytds-karaoke-bg", rgba(settings.karaokeBg, settings.karaokeOpacity));
+    overlay.style.setProperty("--ytds-karaoke-color", settings.karaokeTextColor);
+    overlay.style.setProperty("--ytds-karaoke-border", settings.karaokeBg);
 
     // spacing + order
     overlay.style.gap = (Number(settings.rowGap) || 0) + "px";

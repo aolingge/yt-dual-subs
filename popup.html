@@ -277,6 +277,26 @@
         <p class="pos-hint" id="karaokeStatus" role="status"></p>
       </div>
 
+      <fieldset class="karaoke-style" id="karaokeStyle">
+        <legend data-i18n="karaokeStyleLabel">跟读高亮样式</legend>
+        <div class="karaoke-colors">
+          <div class="stack">
+            <label for="karaokeBg" data-i18n="karaokeBgLabel">高亮背景颜色</label>
+            <input type="color" id="karaokeBg" />
+          </div>
+          <div class="stack">
+            <label for="karaokeTextColor" data-i18n="karaokeTextColorLabel">高亮文字颜色</label>
+            <input type="color" id="karaokeTextColor" />
+          </div>
+        </div>
+        <div class="row">
+          <label for="karaokeOpacity"><span data-i18n="karaokeOpacityLabel">高亮背景不透明度</span> <b id="karaokeOpacityV">95%</b></label>
+          <input type="range" id="karaokeOpacity" min="0" max="1" step="0.05" />
+        </div>
+        <p class="pos-hint" data-i18n="karaokeStyleHint">不透明度越高，视频越不容易透过高亮背景；100% 完全不透。</p>
+        <p class="karaoke-preview" aria-label="高亮预览" data-i18n-aria="karaokePreview">Ich lerne <span class="karaoke-preview-word">Deutsch</span>.</p>
+      </fieldset>
+
       <div class="row check-row">
         <label class="chk">
           <input type="checkbox" id="wordLookup" />

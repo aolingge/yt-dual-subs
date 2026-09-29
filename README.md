@@ -63,6 +63,8 @@ In **Study**, enable **Box the word being spoken**. The complete sentence stays 
 
 Approximate progress is enabled by default. Turn off **Use approximate progress when word times are missing** to require caption word timestamps; unmatched sentences then remain visible without a word highlight. The popup shows the source used for the current sentence.
 
+In **Study → Word highlight style**, adjust the background color, highlighted text color, and background opacity with a live preview. The default is a 95% opaque gold background with dark text; at 100%, the video does not show through the highlighted background.
+
 ![The complete German sentence remains visible while Spaziergang is highlighted](docs/images/spoken-word-highlighting.png)
 
 *Actual v3.9.0 interface using controlled caption timestamps and a playing demo video. This illustrates the feature, not measured alignment to German speech.*

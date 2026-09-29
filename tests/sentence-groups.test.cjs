@@ -9,7 +9,8 @@ const root = path.join(__dirname, '..');
 function element() {
   let ownText = '';
   const el = {
-    style: {}, isConnected: false, children: [],
+    style: { setProperty(name, value) { this[name] = String(value); } },
+    isConnected: false, children: [],
     classList: { add() {}, remove() {}, toggle() {} },
     appendChild(child) { this.children.push(child); child.isConnected = true; },
     addEventListener() {}, setAttribute() {}, click() {}, remove() {}

@@ -17,6 +17,9 @@ const DEFAULTS = {
   studyRate: 0.75,             // playback rate used while repeating a sentence
   karaoke: true,               // prefer caption word times; optional labeled estimate
   karaokeApproximate: true,
+  karaokeBg: "#ffd65c",
+  karaokeTextColor: "#161616",
+  karaokeOpacity: 0.95,
   wordLookup: true,            // translate a word after a short mouse hover
   revealMode: "always",        // translation visibility: "always" | "hover" | "manual"
   autoCaptions: true,          // turn YouTube's own CC on for you when the page loads
@@ -168,6 +171,13 @@ function setKey(key, val) {
 
 // ---- live preview (mirrors content.js styleOverlay) ----------------------
 function paintPreview() {
+  const highlight = $("karaokeStyle");
+  if (highlight) {
+    highlight.style.setProperty("--ytds-karaoke-bg", rgba(state.karaokeBg, state.karaokeOpacity));
+    highlight.style.setProperty("--ytds-karaoke-color", state.karaokeTextColor);
+    highlight.style.setProperty("--ytds-karaoke-border", state.karaokeBg);
+    highlight.disabled = !state.karaoke;
+  }
   const ov = $("prevOverlay"), o = $("prevOrig"), t = $("prevTrans");
   if (!ov || !o || !t) return;
 
@@ -400,6 +410,10 @@ function bindUI() {
   $("offsetMsV").textContent = formatOffset(state.offsetMs);
   $("karaoke").checked = state.karaoke;
   $("karaokeApproximate").checked = state.karaokeApproximate;
+  $("karaokeBg").value = state.karaokeBg;
+  $("karaokeTextColor").value = state.karaokeTextColor;
+  $("karaokeOpacity").value = state.karaokeOpacity;
+  $("karaokeOpacityV").textContent = Math.round(state.karaokeOpacity * 100) + "%";
   $("wordLookup").checked = state.wordLookup;
   $("autoCaptions").checked = state.autoCaptions;
   paintSegs();
@@ -515,6 +529,12 @@ function wire() {
     b.addEventListener("click", () => { setKey("revealMode", b.dataset.val); paintSegs(); }));
   $("karaoke").addEventListener("change", (e) => setKey("karaoke", e.target.checked));
   $("karaokeApproximate").addEventListener("change", (e) => setKey("karaokeApproximate", e.target.checked));
+  $("karaokeBg").addEventListener("input", (e) => setKey("karaokeBg", e.target.value));
+  $("karaokeTextColor").addEventListener("input", (e) => setKey("karaokeTextColor", e.target.value));
+  $("karaokeOpacity").addEventListener("input", (e) => {
+    $("karaokeOpacityV").textContent = Math.round(+e.target.value * 100) + "%";
+    setKey("karaokeOpacity", +e.target.value);
+  });
   $("wordLookup").addEventListener("change", (e) => setKey("wordLookup", e.target.checked));
 
   // tabs

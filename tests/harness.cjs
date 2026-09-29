@@ -23,7 +23,10 @@ function element() {
   let ownText = '';
   const elementListeners = {};
   const el = {
-    style: {}, isConnected: false, children: [],
+    style: {
+      setProperty(name, value) { this[name] = String(value); },
+      getPropertyValue(name) { return this[name] || ''; }
+    }, isConnected: false, children: [],
     classList: {
       add(...names) { names.forEach((n) => classes.add(n)); },
       remove(...names) { names.forEach((n) => classes.delete(n)); },

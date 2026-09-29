@@ -8,7 +8,7 @@ const root = path.join(__dirname, '..');
 
 function element() {
   return {
-    style: {},
+    style: { setProperty(name, value) { this[name] = String(value); } },
     textContent: '',
     isConnected: false,
     children: [],
@@ -59,6 +59,10 @@ test('style changes do not refetch captions and a language change requests them 
   assert.equal(messages.filter((message) => message.type === 'config').length, 1);
   listeners.storageChanged({ origColor: { newValue: '#abc123' } }, 'sync');
   assert.equal(messages.filter((message) => message.type === 'config').length, 1);
+  listeners.storageChanged({ karaokeBg: { newValue: '#008080' },
+    karaokeTextColor: { newValue: '#ffffff' }, karaokeOpacity: { newValue: 1 } }, 'sync');
+  assert.equal(messages.filter((message) => message.type === 'config').length, 1,
+    'changing highlight style leaves the loaded caption track in place');
   listeners.storageChanged({ targetLang: { newValue: 'de' } }, 'sync');
   assert.equal(messages.filter((message) => message.type === 'config').length, 2);
 });
