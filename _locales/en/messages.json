@@ -22,7 +22,7 @@
   "backendRecommended": { "message": "Recommended" },
   "backendGtx": { "message": "Per-sentence" },
   "backendFast": { "message": "Fast display" },
-  "backendTipHtml": { "message": "<b>Whole-sentence</b>: prefers YouTube's aligned translation; after a 1.5s wait, Google translates the current and next two sentences.<br><b>Per-sentence</b>: sends sentences to Google's free endpoint.<br><b>Fast display</b>: starts Google for the current and next two sentences immediately while YouTube loads. Native caption preview can also use Google before the track arrives. Google may be rate-limited." },
+  "backendTipHtml": { "message": "<b>Whole-sentence</b>: prefers YouTube's aligned translation; after a 0.35s wait, Google translates the current and next two sentences.<br><b>Per-sentence</b>: sends sentences to Google's free endpoint.<br><b>Fast display</b>: starts Google for the current and next two sentences immediately while YouTube loads. Native caption preview can also use Google before the track arrives. Google may be rate-limited." },
   "secLayout": { "message": "Layout" },
   "orderLabel": { "message": "Order" },
   "orderTransTop": { "message": "Translation on top" },

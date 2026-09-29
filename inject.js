@@ -19,6 +19,11 @@
   const ORIGINAL_TIMEOUT_MS = 8000;
   const TRANSLATION_TIMEOUT_MS = 5000;
   const timingTrackCache = new Map(); // bounded, document memory only
+  const SOURCE_RETRY_MS = [750, 2000, 5000];
+  let sourceRetryTimer = null;
+  let sourceRetryStep = 0;
+  let originalCache = null; // current track only; never persisted
+  const originalWaiters = new Set();
   let produceSeq = 0;
 
   // Most recently seen timedtext URL of any kind.
@@ -171,10 +176,10 @@
   }
 
   // page-context fetch — same-origin youtube.com so pot/signature stay valid.
-  async function fetchJson3(url, timeoutMs = ORIGINAL_TIMEOUT_MS) {
+  async function fetchJson3(url, timeoutMs = ORIGINAL_TIMEOUT_MS,
+    controller = typeof AbortController === "function" ? new AbortController() : null) {
     extensionFetchUrls.add(url);
     if (extensionFetchUrls.size > 50) extensionFetchUrls.delete(extensionFetchUrls.values().next().value);
-    const controller = typeof AbortController === "function" ? new AbortController() : null;
     let timer;
     const deadline = new Promise((_resolve, reject) => {
       timer = setTimeout(() => {
@@ -208,6 +213,81 @@
     if (nocuesTimer) { clearTimeout(nocuesTimer); nocuesTimer = null; }
   }
 
+  function clearSourceRetry() {
+    if (sourceRetryTimer) { clearTimeout(sourceRetryTimer); sourceRetryTimer = null; }
+  }
+
+  function scheduleSourceRetry(error) {
+    if (!cfg || sourceRetryTimer || sourceRetryStep >= SOURCE_RETRY_MS.length) return;
+    const vid = currentVideoId, key = sourceKey, nonce = reqNonce;
+    const delay = /\b429\b/.test(String(error)) ? 20000 : SOURCE_RETRY_MS[sourceRetryStep];
+    sourceRetryStep++;
+    const timer = setTimeout(() => {
+      if (sourceRetryTimer !== timer) return;
+      sourceRetryTimer = null;
+      if (vid !== currentVideoId || nonce !== reqNonce || key !== sourceKey) return;
+      if (sourceUrl && sourceVid === currentVideoId) produceCues(true);
+      else { seedSourceSoon(); armNocuesTimer(); }
+    }, delay);
+    sourceRetryTimer = timer;
+  }
+
+  // Observe a successful player response without consuming its body. Native
+  // XML and JSON3 captions feed the same parser and retain their word times.
+  function captureOriginalBody(url, body) {
+    try {
+      if (!isTimedtext(url) || hasTlang(url) || vidOfUrl(url) !== currentVideoId ||
+          normKey(url) !== sourceKey) return;
+      let json = body;
+      if (typeof body === "string") {
+        if (body.trim().startsWith("<") && typeof DOMParser === "function") {
+          const doc = new DOMParser().parseFromString(body, "text/xml");
+          if (doc.querySelector("parsererror")) return;
+          json = { events: [...doc.querySelectorAll("p[t], text[start]")].map((p) => {
+            const legacy = p.tagName === "text";
+            const start = Number(p.getAttribute(legacy ? "start" : "t")) * (legacy ? 1000 : 1);
+            const dur = Number(p.getAttribute(legacy ? "dur" : "d")) * (legacy ? 1000 : 1);
+            const words = [...p.querySelectorAll("s")];
+            return { tStartMs: start, dDurationMs: dur,
+              segs: words.length ? words.map((s) => ({ utf8: s.textContent,
+                ...(s.hasAttribute("t") ? { tOffsetMs: Number(s.getAttribute("t")) } : {}) }))
+                : [{ utf8: p.textContent }] };
+          }) };
+        } else json = JSON.parse(body);
+      }
+      if (!parseJson3(json).length) return;
+      const alreadyLoaded = originalCache?.key === sourceKey;
+      originalCache = { key: sourceKey, videoId: currentVideoId, json };
+      clearSourceRetry();
+      let waiting = false;
+      for (const waiter of originalWaiters) {
+        if (waiter.key === sourceKey && waiter.videoId === currentVideoId) {
+          waiting = true;
+          waiter.resolve(json);
+        }
+      }
+      if (cfg && !waiting && !alreadyLoaded) produceCues(true);
+    } catch (_e) { /* failed copies must never affect the player */ }
+  }
+
+  async function fetchOriginalJson(url) {
+    const key = normKey(url), videoId = vidOfUrl(url);
+    if (originalCache?.key === key && originalCache.videoId === videoId) return originalCache.json;
+    let waiter;
+    const captured = new Promise(resolve => {
+      waiter = { key, videoId, resolve };
+      originalWaiters.add(waiter);
+    });
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    try {
+      return await Promise.race([captured,
+        fetchJson3(buildUrl(url, null), ORIGINAL_TIMEOUT_MS, controller)]);
+    } finally {
+      originalWaiters.delete(waiter);
+      controller?.abort(); // a captured body makes the duplicate unnecessary
+    }
+  }
+
   // Produce cues (+ optional aligned translation) from the captured source URL.
   async function produceCues(force) {
     if (!cfg || !sourceUrl) return;
@@ -219,6 +299,7 @@
     producedForUrl = sourceUrl;
     const run = ++produceSeq;
     clearNocuesTimer();
+    clearSourceRetry();
 
     const vid = currentVideoId;
     const trackKey = sourceKey;
@@ -241,7 +322,7 @@
         ? fetchJson3(buildUrl(baseUrl, mapTlang(cfg.targetLang)), TRANSLATION_TIMEOUT_MS)
             .then(parseJson3, () => null)
         : null;
-      const origJson = await fetchJson3(buildUrl(baseUrl, null));
+      const origJson = await fetchOriginalJson(baseUrl);
       const cues = parseJson3(origJson);
 
       // ignore if we navigated away mid-fetch (or the source no longer matches)
@@ -258,11 +339,17 @@
           sourceKey = "";
           sourceSpeculative = false;
           armNocuesTimer();
+          scheduleSourceRetry();
           return;
         }
-        post("nocues", { nonce: myNonce });
+        post("nocues", { nonce: myNonce, sourceLang });
+        scheduleSourceRetry();
         return;
       }
+
+      originalCache = { key: trackKey, videoId: vid, json: origJson };
+      sourceRetryStep = 0;
+      clearSourceRetry();
 
       if (translationPromise) {
         post("cues", { cues, tcues: null, aligned: null,
@@ -318,9 +405,11 @@
         sourceKey = "";
         sourceSpeculative = false;
         armNocuesTimer();
+        scheduleSourceRetry(_e);
         return;                     // the real capture will arrive shortly
       }
-      post("nocues", { nonce: myNonce });
+      post("nocues", { nonce: myNonce, sourceLang });
+      scheduleSourceRetry(_e);
     }
   }
 
@@ -338,7 +427,7 @@
       return;
     }
     try {
-      const origJson = await fetchJson3(buildUrl(sourceUrl, null));
+      const origJson = await fetchOriginalJson(sourceUrl);
       const cues = parseJson3(origJson);
       if (!cues.length) { post("exportdata", { ok: false, exportId }); return; }
 
@@ -491,7 +580,7 @@
         return;
       }
     } catch (_e) { /* never throw */ }
-    if (n >= 6) return;             // ~1.2s, then leave it to the sniffer
+    if (n >= 25) return;            // allow a slower player to finish initializing
     if (seedTimer) clearTimeout(seedTimer);
     seedTimer = setTimeout(() => seedSourceSoon(n + 1), 200);
   }
@@ -516,6 +605,7 @@
       // Always keep the freshest exact URL (pot can rotate), but only treat it
       // as a NEW source (and re-produce) when the track identity changes.
       const wasSpeculative = sourceSpeculative;
+      if (key !== sourceKey || url !== sourceUrl) sourceRetryStep = 0;
       sourceUrl = url;
       sourceVid = vidOfUrl(url);
       sourceSpeculative = false;
@@ -539,6 +629,9 @@
         sourceKey = "";
         sourceSpeculative = false;
         producedForUrl = "";
+        originalCache = null;
+        sourceRetryStep = 0;
+        clearSourceRetry();
         produceSeq++;
         if (seedTimer) { clearTimeout(seedTimer); seedTimer = null; }
         clearNocuesTimer();
@@ -558,7 +651,10 @@
       nocuesTimer = null;
       if (vid !== currentVideoId) return;
       if (nonceAtArm !== reqNonce) return;
-      if (!sourceUrl) post("nocues");      // never saw the player fetch captions
+      if (!sourceUrl) {
+        post("nocues");
+        scheduleSourceRetry();
+      }
     }, 6000);
   }
 
@@ -582,6 +678,8 @@
         // Adopt the content-supplied nonce so our posts correlate to THIS
         // sendConfig(); content.js drops any reply with an older nonce.
         if (typeof d.nonce === "number") reqNonce = d.nonce;
+        clearSourceRetry();
+        sourceRetryStep = 0;
         producedForUrl = "";            // force re-produce under new config
         if (sourceUrl && sourceVid === currentVideoId) {
           produceCues(true);            // already captured for this video
@@ -622,7 +720,19 @@
     };
 
     XHR.send = function () {
-      try { noteTimedtext(this.__ytdsUrl); } catch (_e) { /* ignore */ }
+      try {
+        const url = this.__ytdsUrl;
+        noteTimedtext(url);
+        if (isTimedtext(url) && !hasTlang(url) && this.addEventListener) {
+          this.addEventListener("load", () => {
+            try {
+              if (this.status >= 200 && this.status < 300) {
+                captureOriginalBody(url, this.responseType === "json" ? this.response : this.responseText);
+              }
+            } catch (_e) { /* ignore */ }
+          }, { once: true });
+        }
+      } catch (_e) { /* ignore */ }
       return origSend.apply(this, arguments);
     };
   } catch (_e) { /* never throw */ }
@@ -632,13 +742,21 @@
     const origFetch = window.fetch;
     if (typeof origFetch === "function") {
       window.fetch = function (input, init) {
+        const result = origFetch.apply(this, arguments);
         try {
           let url = "";
           if (typeof input === "string") url = input;
           else if (input && typeof input.url === "string") url = input.url;
           noteTimedtext(url);
+          if (isTimedtext(url) && !hasTlang(url)) {
+            result.then((res) => {
+              if (res.ok && res.clone) {
+                res.clone().text().then((body) => captureOriginalBody(url, body)).catch(() => {});
+              }
+            }).catch(() => {});
+          }
         } catch (_e) { /* ignore */ }
-        return origFetch.apply(this, arguments);
+        return result;
       };
     }
   } catch (_e) { /* never throw */ }

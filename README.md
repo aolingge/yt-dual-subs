@@ -114,11 +114,13 @@ Load the cloned folder using the same steps above. There is no build step or dep
 
 | Mode | What it does |
 | --- | --- |
-| **Whole-sentence** — default | Prefers YouTube's translated track. If it is still pending after 1.5 seconds, Google prepares the current and next two sentences. |
+| **Whole-sentence** — default | Prefers YouTube's translated track. If it is still pending after 0.35 seconds, Google prepares the current and next two sentences. |
 | **Per-sentence** | Translates displayed sentences through Google. |
 | **Fast display** | Starts Google for the current and next two sentences while YouTube's translated track loads. |
 
 The original is displayed as soon as available and does not wait for translation. While the full track loads, visible native captions can be displayed and translated first in **any mode**. Loaded captions follow the video's clock; late translation responses are checked against the current sentence. Network delays and provider rate limits still affect when a new translation arrives.
+
+The extension reuses complete captions already received by the player and retries transient loading failures automatically. In the native-caption fallback, growing text shares a translation queue; a translated prefix stays visible with **…** until the latest translation arrives. Pausing to wait also keeps translations loading.
 
 Target languages include the built-in list and **Other language code…**, for example `nl`, `tr`, `uk`, or `pt-BR`. This is a multilingual extension; it is not limited to German.
 

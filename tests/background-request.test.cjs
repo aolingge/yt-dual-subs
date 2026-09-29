@@ -23,7 +23,7 @@ class FakeAbortController {
 }
 
 // withTimers injects a controllable clock so a request that never settles can be
-// driven past its 8000 ms deadline without waiting.
+// driven past its 4000 ms deadline without waiting.
 function mountBackground(fetch, { withTimers = false } = {}) {
   const listeners = {};
   const timers = [];
@@ -91,7 +91,7 @@ test('a hung request is aborted at its deadline, retried once, then gives up', a
 
   assert.equal(started.length, 1);
   assert.equal(timers.length, 1);
-  assert.equal(timers[0].ms, 8000);
+  assert.equal(timers[0].ms, 4000);
 
   timers[0].fn();                                            // the deadline fires
   await tick();

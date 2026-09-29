@@ -27,6 +27,76 @@ test('a slow whole-track translation warms the current and upcoming sentences', 
   assert.equal(p.read().translation, '第一句。');
 });
 
+test('default translation fallback starts within 0.4 seconds of a pending track', async () => {
+  const p = await mountContent({ cues: originals, aligned: null, translationPending: true });
+  p.advance(400).tick();
+  assert.ok(p.requests.some(r => r.message.text === 'Erste.'));
+  assert.ok(p.requests.some(r => r.message.text === 'Zweite.'));
+});
+
+test('pausing to wait does not stop loading the pending current translation', async () => {
+  const p = await mountContent({ cues: originals, aligned: null, translationPending: true });
+  p.setPaused(true);
+  p.advance(400).tick();
+  assert.ok(p.requests.some(r => r.message.text === 'Erste.'));
+  p.respond(0, { ok: true, translated: '第一句。' });
+  assert.equal(p.read().translation, '第一句。');
+});
+
+test('incremental native captions share one request and retain a useful translated prefix', async () => {
+  const p = await mountContent({ skipCues: true, initialNativeCaption: 'Wir machen' });
+  p.runTimeouts();
+  assert.equal(p.requests.length, 1);
+  p.native('Wir machen einen').tick(); p.runTimeouts();
+  p.native('Wir machen einen Spaziergang.').tick(); p.runTimeouts();
+  assert.equal(p.requests.length, 1, 'word additions queue the latest text instead of flooding Google');
+  p.respond(0, { ok: true, translated: '我们进行' });
+  assert.equal(p.read().translation, '我们进行 …');
+  p.runTimeouts();
+  assert.equal(p.requests.length, 2);
+  assert.equal(p.requests[1].message.text, 'Wir machen einen Spaziergang.');
+  p.respond(1, { ok: true, translated: '我们去散步。' });
+  assert.equal(p.read().translation, '我们去散步。');
+});
+
+test('fallback retries a failed stable caption but respects the rate-limit cooldown', async () => {
+  const p = await mountContent({ skipCues: true, initialNativeCaption: 'Hallo.' });
+  p.runTimeouts();
+  p.respond(0, { ok: false, error: 'network failure' });
+  p.advance(1100).tick(); p.runTimeouts();
+  assert.equal(p.requests.length, 2, 'unchanged native text may recover from a network failure');
+  p.respond(1, { ok: false, error: 'translate http 429' });
+  p.advance(1000).tick(); p.runTimeouts();
+  assert.equal(p.requests.length, 2);
+  p.advance(20000).tick(); p.runTimeouts();
+  assert.equal(p.requests.length, 3);
+});
+
+test('a rate limit still cools down after the native caption changes sentences', async () => {
+  const p = await mountContent({ skipCues: true, initialNativeCaption: 'Hallo.' });
+  p.runTimeouts();
+  p.native('Eine andere Aussage.').tick();
+  p.respond(0, { ok: false, error: 'translate http 429' });
+  p.advance(1000).tick(); p.runTimeouts();
+  assert.equal(p.requests.length, 1, 'a sentence change must not bypass the endpoint cooldown');
+  p.advance(20000).tick(); p.runTimeouts();
+  assert.equal(p.requests.length, 2);
+  assert.equal(p.requests[1].message.text, 'Eine andere Aussage.');
+});
+
+test('an incremental fallback reply is still discarded after an unrelated sentence or seek', async () => {
+  const p = await mountContent({ skipCues: true, initialNativeCaption: 'Wir machen' });
+  p.runTimeouts();
+  p.native('Ganz andere Wörter.').tick(); p.runTimeouts();
+  assert.equal(p.requests.length, 1, 'unrelated word changes also keep network requests bounded');
+  p.respond(0, { ok: true, translated: '错误的旧译文。' });
+  assert.equal(p.read().translation, '');
+  p.runTimeouts();
+  p.fire('seeking');
+  p.respond(1, { ok: true, translated: '跳转前的旧译文。' });
+  assert.equal(p.read().translation, '');
+});
+
 test('a track translation arriving between clock ticks paints both lines at the current time', async () => {
   const p = await mountContent({ cues: originals, aligned: null, translationPending: true });
   p.video.currentTime = 1.2; // playback moved, the periodic tick has not run

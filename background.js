@@ -30,7 +30,7 @@ function cacheSet(key, val) {
 // in-flight slots forever, so every attempt gets its own deadline. One retry
 // covers a dropped connection; a rate-limit answer is never retried, because
 // that only deepens the limit.
-const REQUEST_TIMEOUT_MS = 8000;
+const REQUEST_TIMEOUT_MS = 4000;
 
 async function fetchOnce(url) {
   const controller = typeof AbortController === "function" ? new AbortController() : null;

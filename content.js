@@ -214,7 +214,7 @@
   const transRetryAt = new Map(); // delay network-error retries, avoid a tick-rate burst
   const PREFETCH_AHEAD = 3;     // keep gtx bursts small; the active cue goes first
   const PREFETCH_AHEAD_PENDING = 2; // narrower window while tlang is still loading
-  const PENDING_GOOGLE_AFTER_MS = 1500; // slow direct translations must not block forever
+  const PENDING_GOOGLE_AFTER_MS = 350; // a brief head start, then warm the visible sentence
   const GTX_BACKOFF_MS = [20000, 60000, 180000]; // 429 cooldown ladder
   const MAX_GTX_INFLIGHT = 4;    // active requests bypass this prefetch-only cap
   const ZERO_DUR_FLOOR_MS = 1000; // min visible window for a trailing zero-dur cue
@@ -264,6 +264,9 @@
   let lastSource = "";
   let lastTransSource = "";
   let lastReqToken = 0;
+  let fallbackInflight = null;
+  let fallbackRetryAt = 0;
+  let fallbackTranslation = "";
   const DEBOUNCE_MS = 120;
 
   // bookkeeping
@@ -387,6 +390,10 @@
       if (pollTimer) {
         lastReqToken++;             // old fallback translation is for stale settings
         if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = null;
+        fallbackInflight = null;
+        fallbackRetryAt = 0;
+        fallbackTranslation = "";
         lastTransSource = "";
         setTranslation("", "");
         if (lastSource) scheduleTranslate(lastSource);
@@ -1520,7 +1527,11 @@
     // Paused (or backgrounded) playback cannot change which line belongs on
     // screen, so skip the work — except for the single forced tick after a
     // seek, a video change or a settings change (cueDirty).
-    if ((video.paused || document.hidden) && !cueDirty) return;
+    if ((video.paused || document.hidden) && !cueDirty) {
+      // Pausing to wait for a translation must not stop loading it.
+      if (!document.hidden && activeCueIdx >= 0) prefetchFrom(activeCueIdx);
+      return;
+    }
     cueDirty = false;
     // User sync nudge: + makes each line appear later, - earlier. Only the cue
     // engine honours it; the scraped fallback mirrors YouTube's own layer and
@@ -1694,7 +1705,7 @@
   // Prefetch only groups without a complete direct translation. In particular,
   // a multi-fragment sentence cannot use just one misaligned tlang cue.
   // Window-bounded to stay gentle on the endpoint. Fast mode warms two upcoming
-  // sentences immediately; whole-track mode does so after a 1.5s grace period.
+  // sentences immediately; whole-track mode does so after a 0.35s grace period.
   function prefetchFrom(startIdx) {
     if (!settings.enabled || !displayCueList || gtxBlocked()) return;
     let ahead = PREFETCH_AHEAD;
@@ -2060,25 +2071,60 @@
   // =========================================================================
   // FALLBACK MODE (v1 rendered-scrape)
   // =========================================================================
+  function extendsNativeCaption(previous, next) {
+    if (!previous || !next.startsWith(previous) || endsSentence(previous, next)) return false;
+    const suffix = next.slice(previous.length);
+    return /^[\s,.;:!?。，、！？；：]/.test(suffix) || UNSPACED_END_RE.test(previous);
+  }
+
   function scheduleTranslate(text) {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(() => {
-      if (text !== lastSource) return;        // caption already moved on
-      if (text === lastTransSource) return;   // identical text already shown
-      const token = ++lastReqToken;
-      askBackground(
-        { type: "translate", text, targetLang: settings.targetLang },
+    if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+    if (fallbackInflight || gtxBlocked() || Date.now() < fallbackRetryAt) return;
+    const timer = setTimeout(() => {
+      if (debounceTimer !== timer) return;
+      debounceTimer = null;
+      if (!pollTimer || text !== lastSource || text === lastTransSource || fallbackInflight ||
+          gtxBlocked() || Date.now() < fallbackRetryAt) return;
+      const token = lastReqToken;
+      const pending = { token, text };
+      fallbackInflight = pending;
+      const handed = askBackground(
+        { type: "translate", text, targetLang: settings.targetLang, sourceLang: cueSourceLang },
         (resp) => {
-          if (!extAlive() || chrome.runtime.lastError) return;
-          if (token !== lastReqToken) return;
-          if (text !== lastSource) return;
-          if (readNativeCaption() !== text) { fallbackTick(); return; }
-          if (resp && resp.ok && resp.translated) {
-            setTranslation(resp.translated, text);
+          const ownsSlot = fallbackInflight === pending;
+          if (ownsSlot) fallbackInflight = null;
+          if (!extAlive() || !pollTimer) return;
+          const rateLimited = resp && /\b429\b/.test(String(resp.error));
+          // A changed sentence does not remove the endpoint's rate limit.
+          if (ownsSlot && rateLimited) {
+            gtxCooldownUntil = Date.now() + GTX_BACKOFF_MS[Math.min(gtxBackoffStep++, GTX_BACKOFF_MS.length - 1)];
           }
+          if (token !== lastReqToken) {
+            if (ownsSlot && lastSource) scheduleTranslate(lastSource);
+            return;
+          }
+          if (readNativeCaption() !== lastSource) fallbackTick();
+          if (token !== lastReqToken ||
+              (text !== lastSource && !extendsNativeCaption(text, lastSource))) return;
+          if (!chrome.runtime.lastError && resp && resp.ok && resp.translated) {
+            fallbackRetryAt = 0;
+            gtxCooldownUntil = 0;
+            gtxBackoffStep = 0;
+            // Only accept a prefix of this same sentence; never regress a newer result.
+            if (!lastTransSource || text.length >= lastTransSource.length) {
+              fallbackTranslation = resp.translated;
+              setTranslation(resp.translated + (text === lastSource ? "" : " …"), text);
+            }
+          } else if (!rateLimited) fallbackRetryAt = Date.now() + 1000;
+          if (lastSource && lastSource !== lastTransSource) scheduleTranslate(lastSource);
         }
       );
+      if (!handed && fallbackInflight === pending) {
+        fallbackInflight = null;
+        fallbackRetryAt = Date.now() + 1000;
+      }
     }, DEBOUNCE_MS);
+    debounceTimer = timer;
   }
 
   function fallbackTick() {
@@ -2090,10 +2136,21 @@
       nativeSkipText = null;
     }
     const text = readNativeCaption();
-    if (text === lastSource) { updateNativeSuppression(); return; }
+    if (text === lastSource) {
+      updateNativeSuppression();
+      if (text && text !== lastTransSource && !fallbackInflight && !debounceTimer) scheduleTranslate(text);
+      return;
+    }
+    const continuing = extendsNativeCaption(lastSource, text);
     lastSource = text;
-    lastReqToken++;                  // an earlier source's reply must not repaint
-    setTranslation("", "");
+    if (!continuing) {
+      lastReqToken++;
+      fallbackRetryAt = 0;
+      fallbackTranslation = "";
+      setTranslation("", "");
+    } else if (lastTransSource) {
+      setTranslation(fallbackTranslation + " …", lastTransSource);
+    }
 
     if (!text) {
       if (debounceTimer) clearTimeout(debounceTimer);
@@ -2144,6 +2201,9 @@
     lastSource = "";
     lastTransSource = "";
     lastReqToken++;
+    fallbackInflight = null;
+    fallbackRetryAt = 0;
+    fallbackTranslation = "";
   }
 
   function onNoCues(data) {
@@ -2163,7 +2223,7 @@
     displayCueList = null;
     tcueList = null;
     cueVideoId = "";
-    cueSourceLang = "auto";
+    cueSourceLang = data?.sourceLang || "auto";
     translationPending = false;
     fastPreviewIdx = -1;
     if (settings.enabled) startFallback();
@@ -2665,7 +2725,14 @@
   // line from before the jump. Those events do not bubble, but a capture-phase
   // listener on window still sees them; the tick itself is skipped while paused
   // unless cueDirty is set here.
-  function onPlaybackJump() {
+  function onPlaybackJump(event) {
+    if (pollTimer && (event?.type === "seeking" || event?.type === "seeked")) {
+      lastReqToken++;
+      fallbackInflight = null;
+      fallbackRetryAt = 0;
+      fallbackTranslation = "";
+      setTranslation("", "");
+    }
     cueDirty = true;
     cueTick();
     if (pollTimer) fallbackTick();

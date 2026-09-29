@@ -266,10 +266,19 @@ test('a stale donor cannot update a new config or a newly navigated video', asyn
     const donor = b.requests.find((r) => r.url.includes('kind=asr'));
     if (navigate) b.location.href = 'https://www.youtube.com/watch?v=other';
     b.config(2);
+    await flush(); // a same-video config can immediately reuse the loaded original
     const count = b.posted.length;
     b.respond(donor, [event('Hallo schöne Welt.', [0, 1000, 2500])]);
     await flush();
-    assert.equal(b.posted.length, count);
+    if (navigate) assert.equal(b.posted.length, count);
+    else {
+      const updates = b.posted.slice(count);
+      assert.equal(updates.length, 1);
+      assert.equal(updates[0].nonce, 2, 'only the current config may use a shared pending donor');
+      assert.equal(updates[0].cues[0].wordTimingSource, 'automatic');
+      assert.equal(b.requests.filter(r => !r.url.includes('kind=asr')).length, 1,
+        'the current original is reused instead of fetched again');
+    }
   }
 });
 
@@ -292,7 +301,6 @@ test('a cached donor still follows the first original post, and disabling timing
     [event('Hallo schöne Welt.', [0, 1000, 2500])]);
   await flush();
   b.config(2);
-  b.respond(b.requests.at(-1), [event('Hallo schöne Welt.')]);
   await flush();
   assert.equal(b.posted[2].wordTimingUpdate, undefined, 'original first, even with cached timing');
   assert.equal(b.posted[3].wordTimingUpdate, true);

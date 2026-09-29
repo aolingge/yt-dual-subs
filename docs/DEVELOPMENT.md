@@ -30,10 +30,10 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 ## Caption and translation flow
 
 1. The page-world script observes the player's caption requests and captures the timedtext URL, including any player-provided authorization parameters.
-2. Original JSON3 cues and the selected translated track are fetched in parallel. Native-caption text can appear before those requests finish.
+2. Original cues race the player's copied JSON3/XML response against a JSON3 fetch. The current original track is cached in page memory; transient failures retry up to three times, with a longer delay for rate limits. Track discovery continues for slower player initialization. Translation loads independently.
 3. The content script groups cues for readable sentences and selects the current sentence using `video.currentTime`.
-4. Translated cues are paired and timestamp-checked. When needed, the service worker translates the displayed sentence through Google; pending requests can also prepare the next two sentences.
-5. A translation response rechecks the current video/sentence before repainting. Old results may be cached, but must not be shown beside a different sentence.
+4. Translated cues are paired and timestamp-checked. After a 350ms head start, Google can prepare the current and next two sentences while the translated track is pending, including while paused. Each Google attempt has a 4-second deadline, with one retry for a network failure.
+5. A translation response rechecks the current video/sentence before repainting. Native fallback serializes changing text into the latest request; a translated prefix may remain within the same growing sentence, marked with an ellipsis. Different sentences, seeks, languages, and videos invalidate old replies. Failed stable text can retry; rate limits respect cooldowns.
 6. Word highlighting prefers native caption word times. Missing times can be matched against a same-language ASR track in the background; only a unique contiguous lexical match near the original cue is accepted. Translated tracks, other videos, ambiguous repetitions, and changed/missing words do not supply times.
 7. If enabled, approximate progress distributes words over the displayed sentence duration. Its badge stays visible and the popup identifies the source. This feature does not analyze audio.
 

@@ -22,7 +22,7 @@
   "backendRecommended": { "message": "推荐" },
   "backendGtx": { "message": "逐句翻译" },
   "backendFast": { "message": "快速显示" },
-  "backendTipHtml": { "message": "<b>整句翻译</b>：优先使用 YouTube 对齐译文；等待超过 1.5 秒后用 Google 翻译当前句及后两句。<br><b>逐句翻译</b>：调用 Google 免费接口逐句翻译。<br><b>快速显示</b>：立即用 Google 翻译当前句及后两句，同时加载 YouTube 译文。字幕轨未到时，画面字幕的即时显示也可用 Google 翻译。Google 可能触发限流。" },
+  "backendTipHtml": { "message": "<b>整句翻译</b>：优先使用 YouTube 对齐译文；等待超过 0.35 秒后用 Google 翻译当前句及后两句。<br><b>逐句翻译</b>：调用 Google 免费接口逐句翻译。<br><b>快速显示</b>：立即用 Google 翻译当前句及后两句，同时加载 YouTube 译文。字幕轨未到时，画面字幕的即时显示也可用 Google 翻译。Google 可能触发限流。" },
   "secLayout": { "message": "布局" },
   "orderLabel": { "message": "上下顺序" },
   "orderTransTop": { "message": "译文在上" },
