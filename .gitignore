@@ -11,3 +11,6 @@ HANDOFF.md
 tools/audio-alignment/.venv/
 __pycache__/
 *.pyc
+
+# Report written by tools/verify-bilibili.mjs — a local run artifact.
+tools/verify-bilibili-report.json

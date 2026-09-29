@@ -5,7 +5,7 @@
 <h1 align="center">YT Dual Subs</h1>
 
 <p align="center"><strong>Learn languages from the videos you already watch.</strong><br />
-Original captions, translations, word lookup, and sentence practice — right on YouTube.</p>
+Original captions, translations, word lookup, and sentence practice — right on YouTube and Bilibili.</p>
 
 <p align="center">
   <a href="https://github.com/aolingge/yt-dual-subs/archive/refs/heads/main.zip">Download current source</a> ·
@@ -15,7 +15,7 @@ Original captions, translations, word lookup, and sentence practice — right on
 </p>
 
 <p align="center">
-  <img alt="Source version 3.11.0" src="https://img.shields.io/badge/source-3.11.0-3ea6ff" />
+  <img alt="Source version 3.12.0" src="https://img.shields.io/badge/source-3.12.0-3ea6ff" />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -35,8 +35,28 @@ Original captions, translations, word lookup, and sentence practice — right on
 | Remember a useful phrase | Search the transcript, jump to a sentence, save it, and review it later with the translation hidden. |
 | Keep the picture comfortable | Move the box, drag either edge to adjust its width, and set each line's font, color, and background. Layout adapts to smaller players and fullscreen. |
 | Take your study material with you | Export original, translated, or bilingual SRT files, and back up saved sentences as JSON. |
+| Learn German from Chinese videos | On Bilibili, read the German translation above the Chinese original, with your own subtitle file when a video has no caption track. |
 
 **Free to use · Open source · No extension account · No API key required.**
+
+## Bilibili: Chinese videos with German subtitles
+
+On a [Bilibili](https://www.bilibili.com) video page the extension shows the
+**German translation on the top line** and the **Chinese original on the bottom
+line**, both from the same caption segment and both following the video clock.
+Your YouTube target language and line order are stored separately, so switching
+Bilibili to German leaves them untouched.
+
+Bilibili's default here is Chinese → **German**, translation on top. This works
+on ordinary submitted videos (`bilibili.com/video/…`), including multi-part
+videos, web fullscreen and browser fullscreen. If a video has no readable
+Chinese caption track — and visible Chinese burned into the picture does **not**
+count as one — import a UTF-8 SRT file from the popup's **哔哩哔哩** card and it
+is translated the same way.
+
+Read the [Bilibili guide](docs/BILIBILI.md) for what is supported, what is not
+(no live streaming, bangumi, mobile or OCR), how the captions are read, and what
+each status message means.
 
 ### Look up a word without leaving the video
 
@@ -106,12 +126,12 @@ For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load un
 2. Open `edge://extensions` in Edge, or `chrome://extensions` in Chrome.
 3. Turn on **Developer mode**, then click **Load unpacked**.
 4. Select the extracted **yt-dual-subs-main** folder — the one containing `manifest.json`.
-5. Open a YouTube video with captions. The extension normally turns CC on for you; you can disable that option.
-6. Pin the toolbar icon, open its popup, and choose your target language.
+5. Open a YouTube video with captions — or a Bilibili video with Chinese captions. On YouTube the extension normally turns CC on for you; you can disable that option; on Bilibili it uses the caption track the player already loaded.
+6. Pin the toolbar icon, open its popup, and choose your target language. The popup follows the tab it is opened over, so Bilibili and YouTube keep their own language and line order.
 
-**Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
+**Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube and Bilibili tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
 
-The current source is **3.11.0**, including word highlighting that keeps reliable word times when only part of a sentence matches the automatic captions, a pace estimate that follows the speaker's local speed, an explicit word-time mode (auto, approximate follow-along, or audio alignment), truthful timing-source and audio-alignment status, plus optional audio-aligned word highlighting, earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these updates. See the [3.11.0 update notes](docs/releases/v3.11.0.md).
+The current source is **3.12.0**, adding Bilibili support: Chinese caption reading with the German translation above the Chinese original, a per-site target language and line order that leave your YouTube settings alone, local SRT import bound to a video and part, and a popup section that reports the real caption state instead of a permanent spinner. The previous source, **3.11.0**, added word highlighting that keeps reliable word times when only part of a sentence matches the automatic captions, a pace estimate that follows the speaker's local speed, an explicit word-time mode (auto, approximate follow-along, or audio alignment), truthful timing-source and audio-alignment status, plus optional audio-aligned word highlighting, earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these updates. See the [3.12.0 update notes](docs/releases/v3.12.0.md).
 
 Browser references: [Edge sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome unpacked extension guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked).
 
@@ -137,6 +157,8 @@ Load the cloned folder using the same steps above. There is no build step or dep
 | **Fast display** | Starts Google for the current and next two sentences while YouTube's translated track loads. |
 
 The original is displayed as soon as available and does not wait for translation. While the full track loads, visible native captions can be displayed and translated first in **any mode**. Loaded captions follow the video's clock; late translation responses are checked against the current sentence. Network delays and provider rate limits still affect when a new translation arrives.
+
+On Bilibili there is no translated caption track like YouTube's, so **Fast display** has nothing to wait for and the translation always goes through the same Google text translation. The German and Chinese lines are still separate: the Chinese is shown as soon as it arrives, the current sentence is translated first, nearby sentences follow, and the Chinese stays visible if a translation is slow or fails.
 
 The extension reuses complete captions already received by the player and retries transient loading failures automatically. In the native-caption fallback, growing text shares a translation queue; a translated prefix stays visible with **…** until the latest translation arrives. Pausing to wait also keeps translations loading.
 
@@ -165,6 +187,15 @@ Shortcuts can be reassigned at `edge://extensions/shortcuts` or `chrome://extens
 
 Confirm that the video has a caption track in YouTube's **CC / Settings → Subtitles** menu. Enable the extension and captions, then refresh the page — especially after an extension update. Check the popup's status line for loading, fallback, or rate-limit messages. If there is no caption track, the extension cannot create one from audio.
 
+On Bilibili, open the player's caption menu. If there is no Chinese entry, the video has no readable Chinese track and the popup says so; import an SRT file instead. Some tracks are offered only to signed-in viewers, and the popup says that too.
+
+</details>
+
+<details>
+<summary><strong>Why is Bilibili asking me to sign in?</strong></summary>
+
+Bilibili serves some caption tracks only to signed-in viewers. Sign in on Bilibili and refresh the page. The extension uses the page's ordinary session and does not work around login, membership or access restrictions, and it never reads or exports cookies.
+
 </details>
 
 <details>
@@ -177,7 +208,7 @@ Try **Fast display**. It prepares upcoming sentences while the video plays. A sl
 <details>
 <summary><strong>Does it read subtitles burned into the video?</strong></summary>
 
-No. It uses YouTube's caption data or visible native-caption text. It does not perform OCR or speech recognition, and cannot remove captions embedded in the video pixels.
+No. It uses YouTube's caption data, Bilibili's caption data, or visible native-caption text. It does not perform OCR or speech recognition, and cannot remove captions embedded in the video pixels. On Bilibili, Chinese text painted into the picture is not a caption track — import an SRT file instead.
 
 </details>
 
@@ -206,6 +237,8 @@ Translated and bilingual export checks for missing or misaligned spoken lines. I
 
 - No extension analytics or tracking, and no extension account.
 - Translation sends caption text to YouTube or Google; hover lookup sends the hovered word to Google. The Google endpoint is unofficial and may be rate-limited.
+- On Bilibili the extension reads the caption data the page's own player already fetched, using the page's normal session for the site's own public endpoints. It never reads, copies or exports cookies, and adds no logic to get around a login, membership level or access restriction.
+- An imported subtitle file is kept in extension-local storage on this computer and is not uploaded; only the text of the segments being translated is sent to the translation service.
 - German Assistant receives the word only when you click the dictionary link.
 - Settings are staged locally and then written to browser extension sync storage. **Saved sentences are local** and do not sync automatically; use **Export saved / Import saved** for backups and transfers. Uninstalling clears local extension data.
 
@@ -215,7 +248,7 @@ Read the [full privacy and permission details](docs/PRIVACY.md).
 
 Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
 
-Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.11.0 update notes](docs/releases/v3.11.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.12.0 update notes](docs/releases/v3.12.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
 
 ## Credits and license
 
