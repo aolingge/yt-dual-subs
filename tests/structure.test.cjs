@@ -71,18 +71,34 @@ test('the manifest keeps a three-part version the popup can display', () => {
 
 test('early page and isolated scripts use different timing paths with identical code', () => {
   const scripts = JSON.parse(read('manifest.json')).content_scripts;
-  const page = scripts.find(s => s.world === 'MAIN');
-  const isolated = scripts.find(s => s.world !== 'MAIN');
-  assert.equal(page.run_at, 'document_start');
-  assert.equal(isolated.run_at, 'document_start');
-  assert.deepEqual(page.js, ['word-timing-page.js', 'inject.js']);
-  assert.deepEqual(isolated.js, ['settings.js', 'word-timing.js', 'content.js']);
+  const hostOf = (s) => s.matches.join(' ');
+  const pageFor = (host) => scripts.find((s) => s.world === 'MAIN' && hostOf(s).includes(host));
+  const isolatedFor = (host) => scripts.find((s) => s.world !== 'MAIN' && hostOf(s).includes(host));
+
+  // Each platform has exactly one MAIN-world reader: YouTube keeps the original
+  // pair in the original order, Bilibili gets its own reader instead of a fork.
+  assert.deepEqual(pageFor('youtube.com').js, ['word-timing-page.js', 'inject.js']);
+  assert.deepEqual(pageFor('bilibili.com').js, ['bilibili-page.js']);
+
+  for (const host of ['youtube.com', 'bilibili.com']) {
+    const page = pageFor(host);
+    const isolated = isolatedFor(host);
+    assert.ok(page && isolated, 'both worlds are declared for ' + host);
+    assert.equal(page.run_at, 'document_start');
+    assert.equal(isolated.run_at, 'document_start');
+    // site.js is the platform adapter, so it must load before the display stack.
+    // srt.js is the local-file parser the adapter's import path hands text to.
+    // The display stack itself is shared: no per-platform copy of content.js.
+    assert.deepEqual(isolated.js, ['site.js', 'srt.js', 'settings.js', 'word-timing.js', 'content.js']);
+  }
   assert.equal(read('word-timing-page.js'), read('word-timing.js'), 'keep the page copy synchronized');
 });
 
 test('audio helper access is optional and limited to the loopback host', () => {
   const manifest = JSON.parse(read('manifest.json'));
-  assert.deepEqual(manifest.permissions, ['storage']);
+  // storage is the base; tabCapture and offscreen are what let the user capture
+  // the current tab's audio and keep hearing it while it is recognized.
+  assert.deepEqual(manifest.permissions, ['storage', 'tabCapture', 'offscreen']);
   assert.deepEqual(manifest.optional_host_permissions, ['http://127.0.0.1/*']);
   assert.equal(read('alignment.js').includes('credentials: "omit"'), true);
 });

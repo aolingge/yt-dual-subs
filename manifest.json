@@ -4,7 +4,7 @@
   "name": "__MSG_extName__",
   "version": "3.11.0",
   "description": "__MSG_extDesc__",
-  "permissions": ["storage"],
+  "permissions": ["storage", "tabCapture", "offscreen"],
   "optional_host_permissions": ["http://127.0.0.1/*"],
   "host_permissions": [
     "https://translate.googleapis.com/*"
@@ -42,7 +42,21 @@
     },
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["settings.js", "word-timing.js", "content.js"],
+      "js": ["site.js", "srt.js", "settings.js", "word-timing.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://www.bilibili.com/video/*"],
+      "js": ["bilibili-page.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://www.bilibili.com/video/*"],
+      "js": ["site.js", "srt.js", "settings.js", "word-timing.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_start",
       "all_frames": false
