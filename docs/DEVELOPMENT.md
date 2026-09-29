@@ -18,7 +18,7 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 | File | Responsibility |
 | --- | --- |
 | `inject.js` | Page-world caption capture; original/translated track loading and optional same-language automatic timing track. |
-| `word-timing.js` | Shared Unicode word segmentation, timestamp validation, conservative lexical matching, and display-only estimation. Loaded before the bridge/renderer in their respective worlds. |
+| `word-timing.js`, `word-timing-page.js` | Unicode word segmentation, timestamp validation, conservative lexical matching, and display-only estimation. The page copy has identical code under a different filename, so Chromium runs it in both worlds at `document_start`. |
 | `settings.js` | Shared preference reads/live changes and durable local staging; the existing worker merges sync writes with quota backoff. |
 | `content.js` | Video-clock caption rendering, sentence grouping, native-caption fallback, word lookup, drag/resize, player controls, and study messages. |
 | `background.js` | Google translation requests, deduplication, caching, deadlines, preference-save messages, and shortcut dispatch. |
@@ -31,16 +31,21 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 ## Caption and translation flow
 
 1. The page-world script observes the player's caption requests and captures the timedtext URL, including any player-provided authorization parameters.
-2. Original cues race the player's copied JSON3/XML response against a JSON3 fetch. The current original track is cached in page memory; transient failures retry up to three times, with a longer delay for rate limits. Track discovery continues for slower player initialization. Translation loads independently.
+2. Both worlds inject at `document_start`; the content script loads saved settings and waits for the player through a temporary DOM observer, then starts native-caption preview without waiting for `DOMContentLoaded`. Original cues race the player's copied JSON3/XML response against a JSON3 fetch. Repeated configs share a pending original request for the same exact URL; a fresh player token can still recover a stuck request. The current original track is cached in page memory; transient failures retry up to three times, with a longer delay for rate limits. Track discovery continues for slower player initialization. Translation loads independently.
 3. The content script groups cues for readable sentences and selects the current sentence using `video.currentTime`.
 4. Translated cues are paired and timestamp-checked. After a 350ms head start, Google can prepare the current and next two sentences while the translated track is pending, including while paused. Each Google attempt has a 4-second deadline, with one retry for a network failure.
 5. A translation response rechecks the current video/sentence before repainting. Native fallback serializes changing text into the latest request; a translated prefix may remain within the same growing sentence, marked with an ellipsis. Different sentences, seeks, languages, and videos invalidate old replies. Failed stable text can retry; rate limits respect cooldowns.
 6. Word highlighting prefers native caption word times. Missing times can be matched against a same-language ASR track in the background; only a unique contiguous lexical match near the original cue is accepted. Translated tracks, other videos, ambiguous repetitions, and changed/missing words do not supply times.
 7. If enabled, approximate progress distributes words over the displayed sentence duration. Its badge stays visible and the popup identifies the source. This feature does not analyze audio.
 
+Whole-track translations share pending/successful requests in a bounded current-video cache keyed by source track and target language. A translated-track HTTP 429 sets a 20-second page-wide cooldown that config changes, fresh player tokens, and navigation do not reset. Original loading and sentence translation do not wait for it; later configs can retry after the deadline.
+
+Chromium can skip the second injection of the same script URL at one injection stage even when the execution worlds differ. Use distinct timing filenames for the two worlds. After editing `word-timing.js`, run `cp word-timing.js word-timing-page.js`; the structure suite verifies that their contents match. This needs no build step or dependency. See Chromium's [script injection implementation](https://github.com/chromium/chromium/blob/main/extensions/renderer/user_script_injector.cc).
+
 ## Preserve these behaviors
 
 - **Original first:** displaying an available original must not wait for translation.
+- **Early startup:** missing `<html>` or player nodes at injection must be safe. Stop the temporary boot observer once ready; respect a saved disabled setting. Native preview may begin before the rest of the page is parsed.
 - **Clock alignment:** check timing after play/seek and before applying asynchronous translations.
 - **Recovery:** unsuccessful guessed URLs must not replace newer player captures; include response-body timeouts.
 - **Native visibility:** hide native captions only when the extension can replace them or a loaded track owns the current caption gap. Restore them if the extension context becomes invalid.
@@ -68,7 +73,7 @@ node --test tests/word-timing.test.cjs tests/study.test.cjs
 node --test tests/settings.test.cjs
 ```
 
-The suites execute the shipping scripts inside a VM with simulated DOM and extension APIs. They cover startup, clock alignment, source recovery, translation languages, deadlines, layout, selection, resize, shortcuts, study, extension reloads, and staged preference recovery after sync quotas or worker suspension.
+The suites execute the shipping scripts inside a VM with simulated DOM and extension APIs. They cover early startup before the player/root exist, duplicate config requests, translated-track cooldowns, clock alignment, source recovery, translation languages, deadlines, layout, selection, resize, shortcuts, study, extension reloads, and staged preference recovery after sync quotas or worker suspension.
 
 **Browser validation has a separate scope.** Isolated Edge checks with synthetic YouTube fixtures exercise the actual extension UI, but are not proof that every live YouTube video works. A real translation endpoint responding once is not a latency guarantee. After behavior changes, check a captioned live video when available and report unavailable or unverified cases explicitly.
 

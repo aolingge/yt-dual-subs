@@ -7,6 +7,29 @@ const originals = [
   { start: 1000, dur: 1000, text: 'Zweite.' }
 ];
 
+test('early injection waits for the player then adopts native captions without DOMContentLoaded', async () => {
+  const p = await mountContent({ skipCues: true, initialPlayerReady: false,
+    initialRootReady: false, initialNativeCaption: 'Schon sichtbar.' });
+  assert.equal(p.overlayEl(), undefined);
+  assert.equal(p.outbound.some(m => m.type === 'config'), false);
+  p.attachPlayer();
+  assert.deepEqual(p.read(), { original: 'Schon sichtbar.', translation: '' });
+  assert.equal(p.status().mode, 'scrape');
+  assert.equal(p.rootEl.hasClass('ytds-active'), true);
+  assert.equal(p.outbound.filter(m => m.type === 'config').length, 1);
+  p.attachPlayer();
+  assert.equal(p.outbound.filter(m => m.type === 'config').length, 1, 'the boot observer disconnected');
+});
+
+test('early injection preserves a saved disabled preference before the player exists', async () => {
+  const p = await mountContent({ skipCues: true, initialPlayerReady: false,
+    initialRootReady: false, settings: { enabled: false } });
+  p.attachPlayer();
+  assert.equal(p.overlayEl(), undefined);
+  assert.equal(p.status().mode, 'off');
+  assert.equal(p.outbound.some(m => m.type === 'config'), false);
+});
+
 test('native original is visible at boot while the track request has not answered', async () => {
   const p = await mountContent({ skipCues: true, initialNativeCaption: 'Schon sichtbar.' });
   assert.equal(p.read().original, 'Schon sichtbar.');

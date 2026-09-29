@@ -94,7 +94,8 @@ async function mountContent(options = {}) {
     backend = 'tlang', sourceLang = 'de', videoId = 'sample',
     settings = {}, manifestVersion = MANIFEST_VERSION, i18nThrows = false, dead = false,
     playerWidth = 1280, playerHeight = 720, controlHeight = 0, overlayHeight = 0,
-    initialNativeCaption = '', skipCues = false
+    initialNativeCaption = '', skipCues = false,
+    initialPlayerReady = true, initialRootReady = true
   } = options;
 
   // Extension-context death (the extension was reloaded/updated while this page
@@ -110,10 +111,12 @@ async function mountContent(options = {}) {
   const requests = [];
   const outbound = [];
   const resizeObservers = [];
+  const mutationObservers = [];
   const storageWrites = [];
   const location = { href: `https://www.youtube.com/watch?v=${videoId}` };
   const time = clock();
   let nativeCaption = initialNativeCaption;
+  let playerReady = initialPlayerReady;
   let nocuesSent = false;
 
   const video = { currentTime: 0.1, paused: false, playbackRate: 1 };
@@ -132,9 +135,10 @@ async function mountContent(options = {}) {
   player.getBoundingClientRect = () => ({
     left: 0, top: 0, right: geometry.width, bottom: geometry.height, ...geometry
   });
+  const rootEl = element();
   const document = {
     hidden: false,
-    documentElement: element(),
+    documentElement: initialRootReady ? rootEl : null,
     body: element(),
     createElement() {
       const el = element();
@@ -148,7 +152,7 @@ async function mountContent(options = {}) {
       });
       return el;
     },
-    querySelector: (selector) => (selector === '#movie_player' ? player : null),
+    querySelector: (selector) => (selector === '#movie_player' && playerReady ? player : null),
     querySelectorAll: (selector) => (selector === '.ytp-caption-segment' && nativeCaption
       ? [{ textContent: nativeCaption }] : [])
   };
@@ -199,10 +203,15 @@ async function mountContent(options = {}) {
     observe(target) { this.targets.add(target); }
     disconnect() { this.targets.clear(); }
   }
+  class TestMutationObserver {
+    constructor(callback) { this.callback = callback; this.targets = new Set(); mutationObservers.push(this); }
+    observe(target) { this.targets.add(target); }
+    disconnect() { this.targets.clear(); }
+  }
 
   const context = vm.createContext({
     chrome, document, window, URL: TestURL, Blob, Date: time.Date, location,
-    ResizeObserver: TestResizeObserver,
+    ResizeObserver: TestResizeObserver, MutationObserver: TestMutationObserver,
     setTimeout(fn) { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {}
   });
@@ -247,7 +256,15 @@ async function mountContent(options = {}) {
 
   const api = {
     requests, outbound, storageWrites, timers, timeouts, video, player, resizeObservers, downloadedBlobs,
-    rootEl: document.documentElement,
+    rootEl,
+    attachPlayer() {
+      playerReady = true;
+      document.documentElement = rootEl;
+      for (const observer of mutationObservers) {
+        if (observer.targets.has(document)) observer.callback([]);
+      }
+      return api;
+    },
     native(text) { nativeCaption = text; return api; },
     resizePlayer(width, height) {
       geometry.width = width; geometry.height = height;

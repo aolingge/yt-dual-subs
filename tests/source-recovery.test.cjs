@@ -12,6 +12,8 @@ const response = text => ({ ok: true, text: async () => JSON.stringify({
 function mount({ seed = false } = {}) {
   const requests = [], timers = [], posted = [], listeners = {};
   let trackReady = seed;
+  let now = 1700000000000;
+  class Clock extends Date { static now() { return now; } }
   const player = { getOption(_area, name) {
     if (name === 'track') return trackReady ? { languageCode: 'de', vssId: '.de' } : null;
     if (name === 'tracklist') return [{ languageCode: 'de', vssId: '.de',
@@ -29,7 +31,7 @@ function mount({ seed = false } = {}) {
     }
   }
   const context = {
-    URL, XMLHttpRequest,
+    URL, XMLHttpRequest, Date: Clock,
     location: { href: 'https://www.youtube.com/watch?v=sample' },
     document: { getElementById: () => player, querySelector: () => player },
     performance: { getEntriesByType: () => [] },
@@ -49,6 +51,7 @@ function mount({ seed = false } = {}) {
   listeners.message({ source: window, data: { source: 'ytds-content', type: 'config',
     targetLang: 'zh-CN', useTlang: true, nonce: 1 } });
   return { requests, timers, posted,
+    advance(ms) { now += ms; },
     enableTrack() { trackReady = true; },
     config(nonce, targetLang = 'zh-CN') {
       listeners.message({ source: window, data: { source: 'ytds-content', type: 'config',
@@ -58,7 +61,8 @@ function mount({ seed = false } = {}) {
     playerFetch(url) { return context.fetch(url); },
     capture(pot = 'real', language = 'de') {
     const xhr = new context.XMLHttpRequest();
-    xhr.open('GET', `https://www.youtube.com/api/timedtext?v=sample&lang=${language}&pot=${pot}`);
+    const videoId = new URL(context.location.href).searchParams.get('v');
+    xhr.open('GET', `https://www.youtube.com/api/timedtext?v=${videoId}&lang=${language}&pot=${pot}`);
     xhr.send();
     return xhr;
   } };
@@ -72,7 +76,52 @@ test('our own early fetch is not a player capture and never recursively refetche
   await settle();
   assert.equal(p.posted.length, 0, 'an unsigned guess does not claim the real track failed');
   p.capture();
-  assert.equal(p.requests.length, 4);
+  assert.equal(p.requests.length, 3, 'the pending translation is shared with the real capture');
+});
+
+test('startup config messages share pending tracks and only the latest nonce is posted', async () => {
+  const p = mount();
+  p.capture();
+  p.config(2);
+  assert.equal(p.requests.length, 2, 'one original and one translation request');
+  p.requests.find(r => !new URL(r.url).searchParams.has('tlang')).resolve(response('Hallo.'));
+  await settle();
+  assert.equal(p.posted.length, 1);
+  assert.equal(p.posted[0].nonce, 2);
+  p.requests.find(r => new URL(r.url).searchParams.has('tlang')).resolve(response('你好。'));
+  await settle();
+  assert.equal(p.posted.at(-1).nonce, 2);
+  assert.equal(p.posted.at(-1).cues[0].trans, '你好。');
+  p.config(3);
+  await settle();
+  assert.equal(p.requests.length, 2, 'already loaded tracks are reused');
+  assert.equal(p.posted.at(-1).nonce, 3);
+});
+
+test('a translated-track 429 pauses retries across configs, targets, tokens and navigation', async () => {
+  const p = mount();
+  p.capture();
+  p.requests.find(r => new URL(r.url).searchParams.has('tlang')).resolve({ ok: false, status: 429 });
+  p.requests.find(r => !new URL(r.url).searchParams.has('tlang')).resolve({ ok: false, status: 503 });
+  await settle();
+  const retry = p.timers.find(t => t.ms === 750 && !t.cleared);
+  retry.fn();
+  assert.equal(p.requests.filter(r => new URL(r.url).searchParams.has('tlang')).length, 1);
+  p.config(2, 'en');
+  p.capture('rotated');
+  assert.equal(p.requests.filter(r => new URL(r.url).searchParams.has('tlang')).length, 1);
+  p.requests.filter(r => !new URL(r.url).searchParams.has('tlang')).at(-1).resolve(response('Erholt.'));
+  await settle();
+  assert.equal(p.posted.at(-1).cues[0].text, 'Erholt.', 'translation limits never block the original');
+  p.navigate('next');
+  p.config(3, 'en');
+  p.capture('next-token');
+  assert.equal(p.requests.filter(r => new URL(r.url).searchParams.has('tlang')).length, 1,
+    'changing videos must not bypass the endpoint cooldown');
+  p.advance(20001);
+  p.config(4, 'en');
+  assert.equal(p.requests.filter(r => new URL(r.url).searchParams.has('tlang')).length, 2,
+    'the translated track can be requested after the cooldown');
 });
 
 test('a failed guess arriving after the real capture cannot clear or fail over the newer request', async () => {

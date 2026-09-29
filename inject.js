@@ -23,7 +23,10 @@
   let sourceRetryTimer = null;
   let sourceRetryStep = 0;
   let originalCache = null; // current track only; never persisted
+  let originalRequest = null; // share duplicate config requests for the same URL
   const originalWaiters = new Set();
+  const translationTracks = new Map(); // pending/successful current-video tracks
+  let translationCooldownUntil = 0; // endpoint limit survives config/token changes
   let produceSeq = 0;
 
   // Most recently seen timedtext URL of any kind.
@@ -270,22 +273,43 @@
     } catch (_e) { /* failed copies must never affect the player */ }
   }
 
-  async function fetchOriginalJson(url) {
+  function fetchOriginalJson(url) {
     const key = normKey(url), videoId = vidOfUrl(url);
-    if (originalCache?.key === key && originalCache.videoId === videoId) return originalCache.json;
+    if (originalCache?.key === key && originalCache.videoId === videoId) return Promise.resolve(originalCache.json);
+    const fetchUrl = buildUrl(url, null);
+    if (originalRequest?.url === fetchUrl && originalRequest.videoId === videoId) return originalRequest.promise;
     let waiter;
     const captured = new Promise(resolve => {
       waiter = { key, videoId, resolve };
       originalWaiters.add(waiter);
     });
     const controller = typeof AbortController === "function" ? new AbortController() : null;
-    try {
-      return await Promise.race([captured,
-        fetchJson3(buildUrl(url, null), ORIGINAL_TIMEOUT_MS, controller)]);
-    } finally {
+    const request = { url: fetchUrl, videoId };
+    originalRequest = request;
+    request.promise = Promise.race([captured,
+      fetchJson3(fetchUrl, ORIGINAL_TIMEOUT_MS, controller)]).finally(() => {
       originalWaiters.delete(waiter);
       controller?.abort(); // a captured body makes the duplicate unnecessary
-    }
+      if (originalRequest === request) originalRequest = null;
+    });
+    return request.promise;
+  }
+
+  function translationTrack(url, targetLang) {
+    const key = normKey(url) + " " + targetLang;
+    if (translationTracks.has(key)) return translationTracks.get(key);
+    if (Date.now() < translationCooldownUntil) return Promise.resolve(null);
+    const request = fetchJson3(buildUrl(url, targetLang), TRANSLATION_TIMEOUT_MS)
+      .then(parseJson3).catch((error) => {
+        if (/\b429\b/.test(String(error))) translationCooldownUntil = Date.now() + 20000;
+        return null;
+      }).then((cues) => {
+        if (!cues?.length && translationTracks.get(key) === request) translationTracks.delete(key);
+        return cues;
+      });
+    translationTracks.set(key, request);
+    while (translationTracks.size > 4) translationTracks.delete(translationTracks.keys().next().value);
+    return request;
   }
 
   // Produce cues (+ optional aligned translation) from the captured source URL.
@@ -319,8 +343,7 @@
       // original can be rendered as soon as it arrives; it need not wait for
       // YouTube to finish translating the whole track.
       const translationPromise = cfg.useTlang
-        ? fetchJson3(buildUrl(baseUrl, mapTlang(cfg.targetLang)), TRANSLATION_TIMEOUT_MS)
-            .then(parseJson3, () => null)
+        ? translationTrack(baseUrl, mapTlang(cfg.targetLang))
         : null;
       const origJson = await fetchOriginalJson(baseUrl);
       const cues = parseJson3(origJson);
@@ -630,6 +653,8 @@
         sourceSpeculative = false;
         producedForUrl = "";
         originalCache = null;
+        originalRequest = null;
+        translationTracks.clear();
         sourceRetryStep = 0;
         clearSourceRetry();
         produceSeq++;

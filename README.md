@@ -15,7 +15,7 @@ Original captions, translations, word lookup, and sentence practice — right on
 </p>
 
 <p align="center">
-  <img alt="Source version 3.9.1" src="https://img.shields.io/badge/source-3.9.1-3ea6ff" />
+  <img alt="Source version 3.9.2" src="https://img.shields.io/badge/source-3.9.2-3ea6ff" />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -97,7 +97,7 @@ For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load un
 
 **Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
 
-The current source is **3.9.1**, including configurable high-contrast highlights, automatic caption recovery, faster translation fallback, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these fixes. See the [3.9.1 update notes](docs/releases/v3.9.1.md).
+The current source is **3.9.2**, including earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these fixes. See the [3.9.2 update notes](docs/releases/v3.9.2.md).
 
 Browser references: [Edge sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome unpacked extension guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked).
 
@@ -125,6 +125,8 @@ Load the cloned folder using the same steps above. There is no build step or dep
 The original is displayed as soon as available and does not wait for translation. While the full track loads, visible native captions can be displayed and translated first in **any mode**. Loaded captions follow the video's clock; late translation responses are checked against the current sentence. Network delays and provider rate limits still affect when a new translation arrives.
 
 The extension reuses complete captions already received by the player and retries transient loading failures automatically. In the native-caption fallback, growing text shares a translation queue; a translated prefix stays visible with **…** until the latest translation arrives. Pausing to wait also keeps translations loading.
+
+The subtitle interface starts as soon as the player exists, without waiting for the whole page to finish parsing. Repeated startup/configuration messages share pending track requests. A YouTube translated-track rate limit pauses new translation requests for 20 seconds while original loading and Google fallback remain independent.
 
 Target languages include the built-in list and **Other language code…**, for example `nl`, `tr`, `uk`, or `pt-BR`. This is a multilingual extension; it is not limited to German.
 
@@ -199,7 +201,7 @@ Read the [full privacy and permission details](docs/PRIVACY.md).
 
 Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
 
-Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.9.1 update notes](docs/releases/v3.9.1.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.9.2 update notes](docs/releases/v3.9.2.md). If it helps your learning, a GitHub star makes the project easier for others to find.
 
 ## Credits and license
 

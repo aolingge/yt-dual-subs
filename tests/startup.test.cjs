@@ -256,7 +256,7 @@ test('a stale seeded guess never switches the page to scrape mode', async () => 
   const xhr = new XMLHttpRequest();
   xhr.open('GET', 'https://www.youtube.com/api/timedtext?v=sample&lang=de&pot=2');
   xhr.send();
-  assert.equal(requests.length, 4, 'the real capture refetches both tracks');
+  assert.equal(requests.length, 3, 'the real capture shares the pending translation and refetches the original');
   const original = requests.filter((r) => !new URL(r.url).searchParams.has('tlang')).pop();
   original.resolve({ ok: true, text: async () => JSON.stringify({
     events: [{ tStartMs: 0, dDurationMs: 1000, segs: [{ utf8: 'Hallo.' }] }]

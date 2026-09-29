@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="源码版本 3.9.1" src="https://img.shields.io/badge/source-3.9.1-3ea6ff" />
+  <img alt="源码版本 3.9.2" src="https://img.shields.io/badge/source-3.9.2-3ea6ff" />
   <a href="LICENSE"><img alt="MIT 开源许可" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Chrome 和 Edge 桌面浏览器" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="无需 API 密钥" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -99,7 +99,7 @@
 
 **更新时：**将新版文件覆盖到同一个扩展文件夹，在扩展管理页点击重新加载，然后**刷新已打开的 YouTube 标签页**。收藏句子保存在扩展本地；卸载前请[导出收藏备份](#隐私与数据)。
 
-当前源码为 **3.9.1**，包含可调高对比度高亮、字幕自动恢复、翻译加速及设置合并保存。[最新发行包](https://github.com/aolingge/yt-dual-subs/releases/latest)仍为 **3.9.0**；要使用这些修复，请下载源码 ZIP 或使用 Git 克隆。可查看 [3.9.1 更新说明](docs/releases/v3.9.1.md#中文)。
+当前源码为 **3.9.2**，包含字幕提前启动、字幕请求合并、可调高对比度高亮、自动恢复及设置合并保存。[最新发行包](https://github.com/aolingge/yt-dual-subs/releases/latest)仍为 **3.9.0**；要使用这些修复，请下载源码 ZIP 或使用 Git 克隆。可查看 [3.9.2 更新说明](docs/releases/v3.9.2.md#中文)。
 
 浏览器官方教程：[Edge 本地加载扩展](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome 加载已解压扩展](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)。
 
@@ -127,6 +127,8 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 原文可用时就先显示，不等待译文。完整字幕轨尚未加载时，**各模式**都可以先显示播放器已有的原文，并通过 Google 翻译。已加载的字幕按视频时间切换，迟到的译文会重新核对当前句；翻译服务的网络延迟和限流仍会影响到达时间。
 
 扩展会复用播放器已经收到的完整字幕；短暂加载失败后会自动重试。备用原文逐词追加时，翻译请求会合并，已翻译的同句部分以 **…** 标示，随后补上最新译文。暂停等待也会继续加载翻译。
+
+播放器出现后就启动字幕界面，无需等待整个页面解析完成。重复的初始化和配置消息会共用尚未完成的字幕请求。YouTube 整轨翻译被限流时，暂停新翻译请求 20 秒，原文加载和 Google 备用翻译继续独立工作。
 
 目标语言除了内置列表，还可选择**其他语言代码…**，输入 `nl`、`tr`、`uk` 或 `pt-BR` 等代码。插件并不限于德语；具体语种是否有译文，取决于字幕与服务支持。
 
@@ -201,7 +203,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 
 遇到问题可[提交 Issue](https://github.com/aolingge/yt-dual-subs/issues)，说明浏览器与扩展版本、字幕语言、翻译模式和复现步骤。有帮助时可附公开视频链接，请勿上传个人信息。
 
-欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.9.1 更新说明](docs/releases/v3.9.1.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
+欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.9.2 更新说明](docs/releases/v3.9.2.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
 
 ## 致谢与许可
 

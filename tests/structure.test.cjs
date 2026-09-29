@@ -68,3 +68,14 @@ test('the manifest keeps a three-part version the popup can display', () => {
   assert.equal(manifest.manifest_version, 3);
   assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
 });
+
+test('early page and isolated scripts use different timing paths with identical code', () => {
+  const scripts = JSON.parse(read('manifest.json')).content_scripts;
+  const page = scripts.find(s => s.world === 'MAIN');
+  const isolated = scripts.find(s => s.world !== 'MAIN');
+  assert.equal(page.run_at, 'document_start');
+  assert.equal(isolated.run_at, 'document_start');
+  assert.deepEqual(page.js, ['word-timing-page.js', 'inject.js']);
+  assert.deepEqual(isolated.js, ['settings.js', 'word-timing.js', 'content.js']);
+  assert.equal(read('word-timing-page.js'), read('word-timing.js'), 'keep the page copy synchronized');
+});

@@ -46,7 +46,7 @@
       } catch (_e) { /* invalidated */ }
       extGone = true;
     }
-    document.documentElement.classList.toggle("ytds-rendering", false);
+    document.documentElement?.classList.toggle("ytds-rendering", false);
     return false;
   }
 
@@ -892,7 +892,7 @@
   }
 
   function removeOverlay() {
-    document.documentElement.classList.toggle("ytds-rendering", false);
+    document.documentElement?.classList.toggle("ytds-rendering", false);
     destroyWordPopup();
     resizeGesture = null;
     resizeHandles = [];
@@ -941,7 +941,7 @@
     const hasText = (settings.showOriginal && !!lineText(origEl)) ||
       (settings.showTranslation && !!lineText(transEl));
     const ownsTrack = !!cueTimer || !!(pollTimer && readNativeCaption(false));
-    document.documentElement.classList.toggle("ytds-rendering",
+    document.documentElement?.classList.toggle("ytds-rendering",
       settings.enabled && !extGone && (hasText || ownsTrack));
   }
 
@@ -2129,6 +2129,7 @@
   function fallbackTick() {
     if (!settings.enabled) return;
     if (!extAlive()) { stopFallback(); return; }  // extension reloaded; stop quietly
+    if (!ensureOverlay()) return;       // document_start may precede the player
     watchNativeCaptions();
     if (nativeSkipText !== null) {
       if (readNativeCaption(false) === nativeSkipText) { updateNativeSuppression(); return; }
@@ -2690,7 +2691,7 @@
 
   function applyStateToDom(requestCues = true) {
     ensureToggleButton(10);            // keep the control-bar toggle present + in sync
-    document.documentElement.classList.toggle("ytds-active", !!settings.enabled);
+    document.documentElement?.classList.toggle("ytds-active", !!settings.enabled);
     if (!settings.enabled) {
       teardownAll();
     } else {
@@ -2753,7 +2754,20 @@
 
   // ---- boot ----------------------------------------------------------------
   loadSettings().then(() => {
-    applyStateToDom();
-    syncCaptions();            // auto-enable YouTube CC so subtitles show on load
+    // document_start can precede both <html> and the player. Start as soon as
+    // the player exists, without waiting for the rest of YouTube to parse.
+    let observer;
+    const boot = () => {
+      if (!extAlive()) { observer?.disconnect(); return; }
+      if (!document.documentElement || (settings.enabled && !getPlayer())) return;
+      observer?.disconnect();
+      applyStateToDom();
+      syncCaptions();
+    };
+    if (!document.documentElement || (settings.enabled && !getPlayer())) {
+      observer = new MutationObserver(boot);
+      observer.observe(document, { childList: true, subtree: true });
+    }
+    boot();
   });
 })();
