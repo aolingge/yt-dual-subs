@@ -15,7 +15,7 @@ Original captions, translations, word lookup, and sentence practice — right on
 </p>
 
 <p align="center">
-  <img alt="Source version 3.10.0" src="https://img.shields.io/badge/source-3.10.0-3ea6ff" />
+  <img alt="Source version 3.11.0" src="https://img.shields.io/badge/source-3.11.0-3ea6ff" />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -58,12 +58,22 @@ In **Study**, enable **Box the word being spoken**. The complete sentence stays 
 | Available caption data | What you see |
 | --- | --- |
 | Original track provides individual word times | Highlight follows those caption word times. |
-| Original has sentence times; a same-language automatic track has matching words | Reliable, nearby word matches supply timestamps without changing your selected original text. |
-| No reliable word match | **Approximate** progress, clearly labeled in the video: syllables, punctuation pauses and the pace measured from this video's own captions. |
-| No reliable word match | **Approximate** progress, clearly labeled in the video and estimated from sentence duration. |
+| Original has sentence times; a same-language automatic track matches the whole sentence | The matched word times are used without changing your selected original text. |
+| Original has sentence times; the automatic track matches only part of the sentence | The matched words keep their real times and the words between them are placed in order between those anchors. The video badge says **Partly matched**. |
+| No reliable word match | **Approximate** progress, clearly labeled in the video: syllables, punctuation pauses and the pace measured from the captions around the current sentence. |
 | No reliable word match, and the optional audio helper has measured the speech | Word times aligned to the audio for German and English, labeled in the video as audio-derived. |
 
-Approximate progress is enabled by default. Turn off **Use approximate progress when word times are missing** to require caption word timestamps; unmatched sentences then remain visible without a word highlight. The popup shows the source used for the current sentence.
+**Word-time source** in **Study** chooses how far the extension may go:
+
+| Mode | Behaviour |
+| --- | --- |
+| **Auto** (default) | Use the times the captions carry, match the same-language automatic track where it is reliable, and estimate the rest. |
+| **Approximate follow-along** | Never request another caption track and never use the audio model; sentences without caption word times are estimated. |
+| **Audio alignment** | As Auto, and also accept word times measured from the audio by the local helper. |
+
+A sentence whose words come from more than one of these sources is never labelled as exact: matched words and estimated words are marked separately, and the popup reports the source of the sentence on screen. Even caption word times can be wrong, so no timing source is described as 100% accurate.
+
+Approximate progress is enabled by default. Turn off **Use approximate progress when word times are missing** to require caption word timestamps; unmatched sentences then remain visible without a word highlight. The popup shows the source used for the current sentence. If a sentence was matched against the automatic track and you turn approximate progress off, that sentence is shown without a highlight rather than with a partly estimated one.
 
 In **Study → Word highlight style**, adjust the background color, highlighted text color, and background opacity with a live preview. The default is a 95% opaque gold background with dark text; at 100%, the video does not show through the highlighted background.
 
@@ -101,7 +111,7 @@ For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load un
 
 **Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
 
-The current source is **3.10.0**, including approximate word highlighting that follows syllables, punctuation and each speaker's own pace, plus optional audio-aligned word highlighting, earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these updates. See the [3.10.0 update notes](docs/releases/v3.10.0.md).
+The current source is **3.11.0**, including word highlighting that keeps reliable word times when only part of a sentence matches the automatic captions, a pace estimate that follows the speaker's local speed, an explicit word-time mode (auto, approximate follow-along, or audio alignment), truthful timing-source and audio-alignment status, plus optional audio-aligned word highlighting, earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these updates. See the [3.11.0 update notes](docs/releases/v3.11.0.md).
 
 Browser references: [Edge sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome unpacked extension guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked).
 
@@ -205,7 +215,7 @@ Read the [full privacy and permission details](docs/PRIVACY.md).
 
 Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
 
-Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.10.0 update notes](docs/releases/v3.10.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.11.0 update notes](docs/releases/v3.11.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
 
 ## Credits and license
 

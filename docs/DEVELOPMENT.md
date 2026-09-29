@@ -18,7 +18,10 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 | File | Responsibility |
 | --- | --- |
 | `inject.js` | Page-world caption capture; original/translated track loading and optional same-language automatic timing track. |
-| `word-timing.js`, `word-timing-page.js` | Unicode word segmentation, timestamp validation, conservative lexical matching, and display-only estimation. The page copy has identical code under a different filename, so Chromium runs it in both worlds at `document_start`. |
+| `word-timing.js`, `word-timing-page.js` | Unicode word segmentation, timestamp validation, conservative lexical matching (full-sentence match, anchored fragments, local pace), audio-result validation, and display-only estimation. The page copy has identical code under a different filename, so Chromium runs it in both worlds at `document_start`. |
+| `audio-cache.js` | Bounded local cache of audio-derived word times, keyed by video id, source language, caption-track hash, model/helper version and audio start offset. Loaded only by the worker. |
+| `alignment.html`, `alignment.js`, `alignment.css` | Optional analysis page: starts a local-helper job, imports a matching local media file together with its video start time, shows progress and failures, and cancels jobs whose video or track changed. |
+| `tools/audio-alignment/`, `tools/Start-AudioAlignment.*`, `tools/Stop-AudioAlignment.ps1` | Optional Python helper (loopback HTTP, anonymous audio download, FFmpeg decoding, Wav2Vec2 CTC alignment, disk cache) plus install/start/stop scripts. Not needed for captions. |
 | `settings.js` | Shared preference reads/live changes and durable local staging; the existing worker merges sync writes with quota backoff. |
 | `content.js` | Video-clock caption rendering, sentence grouping, native-caption fallback, word lookup, drag/resize, player controls, and study messages. |
 | `background.js` | Google translation requests, deduplication, caching, deadlines, preference-save messages, and shortcut dispatch. |
@@ -35,8 +38,9 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 3. The content script groups cues for readable sentences and selects the current sentence using `video.currentTime`.
 4. Translated cues are paired and timestamp-checked. After a 350ms head start, Google can prepare the current and next two sentences while the translated track is pending, including while paused. Each Google attempt has a 4-second deadline, with one retry for a network failure.
 5. A translation response rechecks the current video/sentence before repainting. Native fallback serializes changing text into the latest request; a translated prefix may remain within the same growing sentence, marked with an ellipsis. Different sentences, seeks, languages, and videos invalidate old replies. Failed stable text can retry; rate limits respect cooldowns.
-6. Word highlighting prefers native caption word times. Missing times can be matched against a same-language ASR track in the background; only a unique contiguous lexical match near the original cue is accepted. Translated tracks, other videos, ambiguous repetitions, and changed/missing words do not supply times.
-7. If enabled, approximate progress distributes words by syllable count, punctuation pauses and a pace measured from adjacent known word starts in the video's timed captions (falling back to a per-language default). Pace samples exclude the final word's unknown duration and punctuation pauses, so trailing caption silence does not slow the estimate. Short cues compress all estimated starts within the cue; long cues retain the 1.4× stretch cap. Its badge stays visible and the popup identifies the source. This feature does not analyze audio.
+6. Word highlighting prefers native caption word times. Missing times are matched against a same-language ASR track in the background by the configured mode: `auto` fetches and matches that track, `approximate` never fetches it, and `audio` additionally accepts verified audio results. A cue whose whole text matches one unique contiguous donor run takes that run's times; otherwise reliable contiguous fragments (at least two consecutive words, one diagonal in donor order, times inside the cue) become anchors and only the words between them are estimated. Repeated phrases matched on more than one diagonal, ambiguous full matches, donor times outside the cue window and changed words are rejected instead of force-timed. Matching normalizes case, numbers (`1.000`/`1,000`/`1000`, `1,5`/`1.5`) and dotted abbreviations (`z. B.`/`z.b.`) for comparison only; displayed text is sliced from the original cue. Each piece keeps its provenance, so a mixed cue reports `automatic-partial` with per-word `caption`/`estimated` flags and is never labelled exact.
+7. If enabled, approximate progress distributes words by syllable count, punctuation pauses and a pace measured from the video's timed captions. The estimate prefers a **local** pace from known word starts within 12s of the cue (widening once to 45s, with outlier rejection), then the video-wide median, then a per-language default; the pace is computed once per caption track and reused while playback advances. Pace samples exclude the final word's unknown duration and punctuation pauses, so trailing caption silence does not slow the estimate. Short cues compress all estimated starts within the cue; long cues retain the 1.4× stretch cap. Its badge stays visible and the popup identifies the source.
+8. Optional audio alignment fills the remaining cues from the video's own audio: the analysis page creates a helper job for the current video id, language and caption text plus the auto caption track's identity, then polls it. Results arrive as per-word `{start, end, score}` sets, are validated against stored cues (`applyAudio`) and applied only to the display grouping whose video id, source language and caption-track hash still match. Cues are queued in playback order (the current sentence first, then upcoming, then earlier), a caption is aligned only inside its own window in audio time, and a reliably detected gap longer than the pause threshold clears the highlight instead of holding the previous word. A record whose video, language, track hash, model/version or audio start offset differs is refused and reported as stale rather than applied; switching video or subtitle track cancels the job. Captions, highlighting and translation never wait for the helper, and every word keeps a start and an end.
 
 Whole-track translations share pending/successful requests in a bounded current-video cache keyed by source track and target language. A translated-track HTTP 429 sets a 20-second page-wide cooldown that config changes, fresh player tokens, and navigation do not reset. Original loading and sentence translation do not wait for it; later configs can retry after the deadline.
 
@@ -55,6 +59,9 @@ Chromium can skip the second injection of the same script URL at one injection s
 - **Storage:** popup/content scripts send preference patches to the worker through `settings.js`; only the worker writes sync preferences. `settingsPendingV1` locally stages edits and the next allowed sync time. Immediate local events update overlays, and delayed sync events must not overwrite pending values or repeat those updates. Writes are serialized, coalesced after 250ms, and spaced by at least 2.5s across worker restarts. Minute/hour quota failures wait 61s/3601s; suspended workers resume on their next activation. Resetting preferences preserves saved cards. Imports merge validated cards without deleting the existing collection.
 - **Export integrity:** translated/bilingual SRT must not silently omit missing or misaligned spoken lines.
 - **Timing provenance:** retain native/matched metadata through grouping and video caches. Estimated times are rendering data, never inserted into raw cues or SRT. Late timing updates must not restart sentence repeat, hide a manually revealed translation, or discard a pending fast translation.
+- **Timing sources stay distinguishable:** a sentence mixing sourced and estimated times must report that mix (never a full match), keep the per-word flags through grouping and cache merges, and let the popup name the source. The mode setting is the only switch that decides whether another caption track is fetched or audio results are accepted; approximate mode must remain fully usable with no helper running.
+- **Audio results are bound, not inherited:** never apply a record whose video id, source language, caption-track hash, model/version or audio start offset differs from the loaded track. Report that state instead of silently ignoring it, and cancel the running job when the video or track changes. A helper failure or absence must leave captions, highlighting and translation intact.
+- **Local pace is cached, not recomputed:** measure the pace once per caption track (invalidated by a new cue list) rather than scanning the whole track on every render tick.
 
 ## Run focused checks
 
@@ -70,12 +77,23 @@ For a focused check:
 node --test tests/latency.test.cjs tests/startup.test.cjs
 node --test tests/layout.test.cjs tests/resize.test.cjs
 node --test tests/word-timing.test.cjs tests/study.test.cjs
+node --test tests/timing-mode.test.cjs tests/audio-timing.test.cjs
 node --test tests/settings.test.cjs
 ```
+
+The optional helper's own checks need no model download, account, or audio file:
+
+```sh
+python -m unittest discover -s tests -p "test_*.py"
+```
+
+Run it with `tools/audio-alignment/.venv/Scripts/python.exe` after `tools/Start-AudioAlignment.ps1 -SetupOnly`.
 
 The suites execute the shipping scripts inside a VM with simulated DOM and extension APIs. They cover early startup before the player/root exist, duplicate config requests, translated-track cooldowns, clock alignment, source recovery, translation languages, deadlines, layout, selection, resize, shortcuts, study, extension reloads, and staged preference recovery after sync quotas or worker suspension.
 
 **Browser validation has a separate scope.** Isolated Edge checks with synthetic YouTube fixtures exercise the actual extension UI, but are not proof that every live YouTube video works. A real translation endpoint responding once is not a latency guarantee. After behavior changes, check a captioned live video when available and report unavailable or unverified cases explicitly.
+
+**Audio-alignment verification status.** The helper, the German model and the full caption→audio→video-time path were exercised on this machine against real German speech (12 public-domain Thorsten recordings, 78 words): every word received a start and an end, times stayed inside each caption window, and shuffled transcripts were rejected. Absolute per-word error against human-checked word boundaries is **not** verified, only one speaker was covered, and the anonymous YouTube audio download could not be exercised end to end here because the network proxy truncated every media stream. See [AUDIO_ALIGNMENT.md](AUDIO_ALIGNMENT.md#what-has-actually-been-verified) before describing accuracy, and never present estimated or audio-derived times as measured speech.
 
 ## Documentation screenshots
 
