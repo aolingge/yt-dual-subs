@@ -1216,13 +1216,29 @@
     return timing.estimate(clean, cueSourceLang, options);
   }
 
+  // A group of merged raw cues must not claim one source it does not have: two
+  // matched cues stay matched, anything mixing matched and estimated words is
+  // reported as partial, and a group containing a cue without timings keeps the
+  // plain caption label.
+  function mergeTimingSource(a, b) {
+    if (a === b) return a;
+    const matched = (s) => s === "automatic" || s === "automatic-partial";
+    return matched(a) && matched(b) ? "automatic-partial" : "captions";
+  }
+
   function buildWordPieces(cue) {
     if (!settings.karaoke || !cue || !window.YtdsWordTiming) return null;
     const clean = { ...cue, text: stripSoundDescriptions(cue.text),
       words: Array.isArray(cue.words)
         ? cue.words.map((w) => w && ({ ...w, u: stripSoundDescriptions(w.u) })) : null };
     const pieces = window.YtdsWordTiming.captionPieces(clean, cueSourceLang);
-    if (pieces) return { pieces, source: cue.wordTimingSource || "captions" };
+    if (pieces) {
+      const source = cue.wordTimingSource || "captions";
+      // "Approximate progress" off means reliable word times only, and a partly
+      // matched sentence still needs estimation for the words between anchors.
+      if (source === "automatic-partial" && !settings.karaokeApproximate) return null;
+      return { pieces, source };
+    }
     const estimated = settings.karaokeApproximate ? estimatedPieces(clean) : null;
     return estimated ? { pieces: estimated, source: "estimated" } : null;
   }
@@ -1238,10 +1254,14 @@
     }
     clearWordSpans();
     wordTimingSource = plan.source;
+    const partial = plan.source === "automatic-partial";
     overlay.classList.toggle("ytds-karaoke-estimated", plan.source === "estimated");
+    overlay.classList.toggle("ytds-karaoke-partial", partial);
     overlay.classList.toggle("ytds-karaoke-audio", plan.source === "audio");
     origEl.setAttribute("data-ytds-timing-label", plan.source === "audio"
-      ? t("karaokeAudioBadge", "音频对齐") : t("karaokeEstimatedBadge", "近似跟读"));
+      ? t("karaokeAudioBadge", "音频对齐")
+      : partial ? t("karaokePartialBadge", "部分匹配 + 估算")
+        : t("karaokeEstimatedBadge", "近似跟读"));
     origEl.textContent = "";              // drop the previous text/spans
     const spans = [];
     const times = [];
@@ -1249,7 +1269,11 @@
     for (const p of plan.pieces) {
       for (const part of segmentCaptionWords(p.u)) {
         const span = document.createElement("span");
-        span.className = part.word ? "ytds-w ytds-lookup-word" : "ytds-lookup-sep";
+        // Words this sentence only estimated are marked so a partly matched
+        // sentence shows which positions are real and which are guessed.
+        span.className = part.word
+          ? (p.s === "estimated" ? "ytds-w ytds-lookup-word ytds-w-est" : "ytds-w ytds-lookup-word")
+          : "ytds-lookup-sep";
         span.textContent = part.text;
         origEl.appendChild(span);
         if (part.word) { spans.push(span); times.push(p.t); ends.push(p.e); }
@@ -1929,8 +1953,7 @@
           rawCount: current.rawCount + 1,
           words: !rolling && !current.rolling && current.words && cue.words
             ? current.words.concat(cue.words) : null,
-          wordTimingSource: current.wordTimingSource === "automatic" ||
-            cue.wordTimingSource === "automatic" ? "automatic" : "captions",
+          wordTimingSource: mergeTimingSource(current.wordTimingSource, cue.wordTimingSource),
           rolling: current.rolling || !!rolling,
           lastStart: cue.start, lastEnd: cueEnd
         };

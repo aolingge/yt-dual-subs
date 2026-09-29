@@ -324,6 +324,7 @@ async function refreshStatus() {
   const labels = {
     captions: t("karaokeStatusCaptions", "跟读：使用原字幕词时间"),
     automatic: t("karaokeStatusAutomatic", "跟读：已匹配同语言自动字幕词时间"),
+    "automatic-partial": t("karaokeStatusAutomaticPartial", "跟读：部分词匹配自动字幕，其余为估算"),
     audio: t("karaokeStatusAudio", "跟读：使用音频对齐词时间"),
     estimated: t("karaokeStatusEstimated", "近似跟读：按音节、标点和本视频语速估算，不代表精确语音时间"),
     unavailable: t("karaokeStatusUnavailable", "此句无可靠词时间，显示完整句子"),

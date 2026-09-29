@@ -9,6 +9,35 @@
     catch (_e) { return text.toLowerCase(); }
   }
 
+  // Numbers are written differently by captions and by automatic tracks: a
+  // German caption writes 1000 as "1.000" while the ASR track writes "1000",
+  // and a decimal comma faces a decimal point. The matching key therefore
+  // drops thousands separators and keeps one decimal separator. Only the key
+  // changes: the text that the reader sees is never rewritten.
+  const NUMERIC = /^\d[\d.,'\u2019\u00a0\u202f ]*\d$/u;
+  const SEPARATORS = /[.,'\u2019\u00a0\u202f ]+/u;
+  function numericKey(text) {
+    if (!/^\d$/u.test(text) && !NUMERIC.test(text)) return null;
+    if (!SEPARATORS.test(text)) return null;
+    const groups = text.split(SEPARATORS);
+    const last = groups[groups.length - 1];
+    const dot = text.lastIndexOf(".");
+    const comma = text.lastIndexOf(",");
+    let decimal = false;
+    if (dot !== -1 && comma !== -1) decimal = dot > comma;
+    else if (groups.length === 2 && last.length !== 3) decimal = true;
+    const digits = groups.join("");
+    if (!decimal) return digits;
+    return digits.slice(0, digits.length - last.length) + "." + last;
+  }
+
+  // Everything word matching compares. `normalize` alone is not enough for
+  // numbers, so tokens carry this key instead.
+  function keyOf(text, language) {
+    const base = normalize(text, language);
+    return numericKey(base) || base;
+  }
+
   function tokens(text, language) {
     if (typeof text !== "string" || text.length > MAX_TEXT) return [];
     try {
@@ -19,10 +48,19 @@
       }
       return [...segmenters.get(locale).segment(text)]
         .filter((p) => p.isWordLike)
-        .map((p) => ({ text: p.segment, index: p.index, key: normalize(p.segment, language) }));
+        .flatMap((p) => {
+          // "z. B." segments into two words while "z.B." segments into one. Both
+          // spell the same two letters, so a dotted initialism is always split:
+          // matching then compares letters, and the display text is untouched.
+          if (!/^(?:\p{L}\.)+\p{L}?$/u.test(p.segment)) {
+            return [{ text: p.segment, index: p.index, key: keyOf(p.segment, language) }];
+          }
+          return [...p.segment.matchAll(/\p{L}/gu)]
+            .map((m) => ({ text: m[0], index: p.index + m.index, key: keyOf(m[0], language) }));
+        });
     } catch (_e) {
       return [...text.matchAll(/[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu)]
-        .map((m) => ({ text: m[0], index: m.index, key: normalize(m[0], language) }));
+        .map((m) => ({ text: m[0], index: m.index, key: keyOf(m[0], language) }));
     }
   }
 
@@ -47,7 +85,7 @@
       previous = w.t;
       const words = tokens(String(w.u || ""), language);
       if (words.length > 1) return null;
-      if (words.length) timed.push({ key: words[0].key, t: w.t, e: w.e });
+      if (words.length) timed.push({ key: words[0].key, t: w.t, e: w.e, s: w.s });
     }
     if (timed.length !== parts.length ||
         parts.some((p, i) => p.key !== timed[i].key)) return null;
@@ -55,6 +93,9 @@
     if (!Number.isFinite(cue.start) || !Number.isFinite(end) ||
         timed.some((w) => w.t < cue.start - 100 || w.t >= end)) return null;
     const pieces = piecesAt(text, parts, timed.map((w) => w.t));
+    // A sentence can mix matched and estimated word times; carry the per-word
+    // provenance so the reader can see which positions are actually known.
+    pieces.forEach((p, i) => { if (timed[i].s) p.s = timed[i].s; });
     if (cue.wordTimingSource === "audio") {
       if (timed.some((w, i) => !Number.isFinite(w.e) || w.e <= w.t || w.e > end ||
           (i + 1 < timed.length && w.e > timed[i + 1].t))) return null;
@@ -182,9 +223,14 @@
     return lo;
   }
 
-  // Transfer only an unambiguous contiguous lexical match near this cue. ASR
-  // revisions and missing/changed words must not silently invent exact times.
-  function align(cues, donorCues, language) {
+  // Where a cue's words are looked for in the automatic track. The margin is
+  // context only: an anchor still has to fall inside the cue itself.
+  const ALIGN_MARGIN = 1200;
+  // One repeated word is not an anchor. Two words in a row, in the right order,
+  // inside the cue's own window, is the smallest fragment worth trusting.
+  const ALIGN_MIN_RUN = 2;
+
+  function donorWords(donorCues, language) {
     const timed = [];
     const seen = new Set();
     for (const cue of donorCues) {
@@ -199,15 +245,76 @@
       }
     }
     timed.sort((a, b) => a.t - b.t);
+    return timed;
+  }
+
+  // Contiguous runs of equal words on one diagonal: cue word j matching donor
+  // word j + d. A run is a candidate anchor, not yet a fact.
+  function anchorRuns(parts, timed, from, to) {
+    const wanted = new Map();
+    for (let j = 0; j < parts.length; j++) {
+      const list = wanted.get(parts[j].key);
+      if (list) list.push(j); else wanted.set(parts[j].key, [j]);
+    }
+    const diagonals = new Map();
+    for (let i = from; i < to; i++) {
+      const list = wanted.get(timed[i].key);
+      if (!list) continue;
+      for (const j of list) {
+        const d = i - j;
+        let entry = diagonals.get(d);
+        if (!entry) { entry = []; diagonals.set(d, entry); }
+        entry.push(j);
+      }
+    }
+    const runs = [];
+    for (const [d, list] of diagonals) {
+      list.sort((a, b) => a - b);
+      let start = 0;
+      for (let k = 1; k <= list.length; k++) {
+        if (k === list.length || list[k] !== list[k - 1] + 1) {
+          if (k - start >= ALIGN_MIN_RUN) {
+            runs.push({ d, jStart: list[start], jEnd: list[k - 1] + 1 });
+          }
+          start = k;
+        }
+      }
+    }
+    return runs;
+  }
+
+  // One cue word in the estimator's units: its syllables plus the pause its
+  // trailing punctuation opens. `following` is whether a word follows it.
+  function anchorWeight(text, parts, index, language, perSyllable, following) {
+    const head = parts[index].index + parts[index].text.length;
+    const tail = text.slice(head, index + 1 < parts.length ? parts[index + 1].index : text.length);
+    return syllables(parts[index].text, language) * perSyllable +
+      (following ? pauseAfter(tail, parts[index].text) : 0);
+  }
+
+  // Transfer word times from the same-language automatic track. ASR revisions
+  // and missing/changed words must not silently invent exact times, so an exact
+  // contiguous match is preferred and is the only thing reported as a caption
+  // match. When one word differs, the words that did match still carry usable
+  // times: contiguous runs become anchors and only the words between two
+  // anchors are estimated, which is reported as a partial (mixed) match.
+  function align(cues, donorCues, language) {
+    const timed = donorWords(donorCues, language);
+    if (!timed.length) return 0;
+    const perSyllable = syllableMs(language);
     let count = 0;
     for (const cue of cues) {
       if (captionPieces(cue, language)) continue;
-      const parts = tokens(String(cue.text || ""), language);
+      const text = String(cue.text || "");
+      const parts = tokens(text, language);
       if (!parts.length || parts.length > 128 || !Number.isFinite(cue.start) ||
           !(cue.dur > 0)) continue;
-      const from = lowerBound(timed, cue.start - 1200);
-      const to = lowerBound(timed, cue.start + cue.dur + 1200);
+      const cueEnd = cue.start + cue.dur;
+      const from = lowerBound(timed, cue.start - ALIGN_MARGIN);
+      const to = lowerBound(timed, cueEnd + ALIGN_MARGIN);
       if (to - from > 256) continue;
+
+      // The whole cue as one contiguous phrase: unambiguous only.
       let match = -1, ambiguous = false;
       for (let i = from; i + parts.length <= to; i++) {
         if (parts.every((p, j) => p.key === timed[i + j].key)) {
@@ -215,12 +322,88 @@
           match = i;
         }
       }
-      if (match < 0 || ambiguous) continue;
-      const times = parts.map((_p, i) => timed[match + i].t);
-      // Do not carry a word from the preceding/following caption into this one.
-      if (times.some((t) => t < cue.start || t >= cue.start + cue.dur)) continue;
-      cue.words = piecesAt(cue.text, parts, times);
-      cue.wordTimingSource = "automatic";
+      if (ambiguous) continue;
+      if (match >= 0) {
+        const times = parts.map((_p, i) => timed[match + i].t);
+        // Do not carry a word from the preceding/following caption into this one.
+        if (times.some((t) => t < cue.start || t >= cueEnd)) continue;
+        cue.words = piecesAt(text, parts, times);
+        cue.wordTimingSource = "automatic";
+        count++;
+        continue;
+      }
+
+      // Only fragments: keep the runs whose times are usable, drop every run
+      // that another place in the track could equally describe.
+      const runs = anchorRuns(parts, timed, from, to);
+      const anchors = [];
+      for (const run of runs) {
+        let previous = -Infinity, ok = true;
+        for (let j = run.jStart; j < run.jEnd; j++) {
+          const t = timed[j + run.d].t;
+          if (t < cue.start || t >= cueEnd || t < previous) { ok = false; break; }
+          previous = t;
+        }
+        if (!ok) continue;
+        const contested = runs.some((other) => other.d !== run.d &&
+          other.jStart < run.jEnd && run.jStart < other.jEnd);
+        if (!contested) anchors.push(run);
+      }
+      if (!anchors.length) continue;
+      anchors.sort((a, b) => a.jStart - b.jStart);
+
+      const times = new Array(parts.length).fill(NaN);
+      const known = new Array(parts.length).fill(false);
+      for (const run of anchors) {
+        for (let j = run.jStart; j < run.jEnd; j++) {
+          times[j] = timed[j + run.d].t;
+          known[j] = true;
+        }
+      }
+
+      // Spread the words of [first, last] over (t0, t1). The anchored word
+      // before the gap (lead) and after it (tail) keep their own share of the
+      // interval, so a filled word never lands on top of an anchor.
+      const fill = (first, last, t0, t1, lead, tail) => {
+        if (last < first) return true;
+        const weights = [];
+        for (let j = first; j <= last; j++) {
+          weights.push(anchorWeight(text, parts, j, language, perSyllable, j < last || tail > 0));
+        }
+        const total = lead + tail + weights.reduce((sum, w) => sum + w, 0);
+        if (!(t1 > t0) || !(total > 0)) return false;
+        // Never stretch an estimate to fill a silence; the highlight may wait.
+        const scale = Math.min(1.4, (t1 - t0) / total);
+        let at = t0 + lead * scale;
+        for (let j = first; j <= last; j++) {
+          times[j] = at;
+          at += weights[j - first] * scale;
+        }
+        return true;
+      };
+
+      const first = known.indexOf(true);
+      const last = known.lastIndexOf(true);
+      const lead0 = anchorWeight(text, parts, first, language, perSyllable, false);
+      let broken = !fill(0, first - 1, cue.start, times[first], 0, lead0);
+      for (let j = first; !broken && j < last; j++) {
+        if (!known[j] || known[j + 1]) continue;
+        let k = j + 1;
+        while (!known[k]) k++;
+        broken = !fill(j + 1, k - 1, times[j], times[k],
+          anchorWeight(text, parts, j, language, perSyllable, true),
+          anchorWeight(text, parts, k, language, perSyllable, false));
+      }
+      if (!broken && last + 1 < parts.length) {
+        broken = !fill(last + 1, parts.length - 1, times[last], cueEnd,
+          anchorWeight(text, parts, last, language, perSyllable, true), 0);
+      }
+      if (broken) continue;
+      if (times.some((t, j) => !Number.isFinite(t) || (j > 0 && t <= times[j - 1]))) continue;
+
+      cue.words = piecesAt(text, parts, times)
+        .map((piece, i) => ({ ...piece, s: known[i] ? "caption" : "estimated" }));
+      cue.wordTimingSource = known.every(Boolean) ? "automatic" : "automatic-partial";
       count++;
     }
     return count;

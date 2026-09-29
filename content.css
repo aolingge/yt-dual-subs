@@ -224,6 +224,7 @@ html.ytds-active.ytds-rendering .caption-window {
 /* This label stays visible whenever word positions are estimated. The pseudo
    element is excluded from text selection/copy and participates in layout. */
 .ytds-karaoke-estimated .ytds-orig::before,
+.ytds-karaoke-partial .ytds-orig::before,
 .ytds-karaoke-audio .ytds-orig::before {
   content: attr(data-ytds-timing-label);
   display: block;
@@ -237,4 +238,9 @@ html.ytds-active.ytds-rendering .caption-window {
 .ytds-karaoke-estimated .ytds-w-on {
   outline: 1px dashed currentColor;
   outline-offset: 1px;
+}
+/* In a partly matched sentence only the estimated words are marked, so the
+   reader can tell a real caption time from a guessed one. */
+.ytds-karaoke-partial .ytds-w-est {
+  border-bottom: 1px dashed currentColor;
 }

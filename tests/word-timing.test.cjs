@@ -68,6 +68,67 @@ test('ambiguous repetitions, changed words, distant words and phrase-level donor
   assert.deepEqual(cues[0].words.map((w) => w.t), [0, 800], 'native times take priority');
 });
 
+test('a sentence with one different word keeps the times of the words that matched', () => {
+  const text = 'Wir treffen uns morgen um zehn Uhr';
+  const cues = [{ start: 0, dur: 5000, text }];
+  const donor = [timed('wir treffen uns heute um zehn uhr', [0, 400, 800, 1300, 2000, 2400, 2800])];
+  assert.equal(timing.align(cues, donor, 'de'), 1);
+  assert.equal(cues[0].wordTimingSource, 'automatic-partial',
+    'a sentence mixing matched and estimated words is never reported as a caption match');
+  const times = cues[0].words.map((w) => w.t);
+  assert.deepEqual([times[0], times[1], times[2], times[4], times[5], times[6]],
+    [0, 400, 800, 2000, 2400, 2800], 'matched words keep their own times');
+  assert.ok(times[3] > times[2] && times[3] < times[4], 'the missing word is filled between its neighbours');
+  assert.deepEqual(cues[0].words.map((w) => w.s),
+    ['caption', 'caption', 'caption', 'estimated', 'caption', 'caption', 'caption']);
+  assert.equal(cues[0].words.map((w) => w.u).join(''), text);
+});
+
+test('leading and trailing words are filled inside their own caption', () => {
+  const cues = [{ start: 2000, dur: 3000, text: 'Also wir treffen uns heute' }];
+  assert.equal(timing.align(cues, [timed('treffen uns', [3000, 3400])], 'de'), 1);
+  const times = cues[0].words.map((w) => w.t);
+  assert.deepEqual(times.slice(2, 4), [3000, 3400], 'the matched pair keeps the donor times');
+  assert.deepEqual(cues[0].words.map((w) => w.s),
+    ['estimated', 'estimated', 'caption', 'caption', 'estimated']);
+  assert.ok(times[0] >= 2000 && times[1] > times[0] && times[1] < times[2]);
+  assert.ok(times[4] > times[3] && times[4] < 5000, 'the trailing word stays inside the caption');
+});
+
+test('a repeated phrase is left to estimation instead of being fixed to one repetition', () => {
+  const cues = [{ start: 0, dur: 4000, text: 'Hallo Welt und guten Tag' }];
+  const donor = [timed('hallo welt und hallo welt guten tag', [0, 500, 900, 2000, 2500, 3000, 3500])];
+  assert.equal(timing.align(cues, donor, 'de'), 1);
+  assert.deepEqual(cues[0].words.map((w) => w.s),
+    ['estimated', 'estimated', 'estimated', 'caption', 'caption'],
+    'the ambiguous phrase is not anchored to either repetition');
+  assert.deepEqual(cues[0].words.slice(3).map((w) => w.t), [3000, 3500], 'the unambiguous tail is still used');
+});
+
+test('numbers and abbreviations match across caption and automatic spellings', () => {
+  const cases = [
+    ['Das kostet 1.000 Euro', 'das kostet 1000 euro'],
+    ['etwa 1,5 Stunden', 'etwa 1.5 stunden'],
+    ['Komm z. B. um 19:30 Uhr', 'komm z.b. um 19:30 uhr']
+  ];
+  for (const [text, donorText] of cases) {
+    const cues = [{ start: 0, dur: 4000, text }];
+    const donor = [timed(donorText, [100, 500, 900, 1300, 1700, 2100, 2500])];
+    assert.equal(timing.align(cues, donor, 'de'), 1, `${text} should match ${donorText}`);
+    assert.equal(cues[0].wordTimingSource, 'automatic');
+    assert.equal(cues[0].words.map((w) => w.u).join(''), text, 'the displayed text is unchanged');
+  }
+});
+
+test('an anchor found outside the caption is never carried in', () => {
+  const late = [{ start: 3500, dur: 2000, text: 'Wir treffen uns morgen' }];
+  assert.equal(timing.align(late, [timed('wir treffen uns morgen', [3300, 3400, 3500, 3600])], 'de'), 0);
+  assert.equal(late[0].words, undefined, 'words starting before the caption are not moved into it');
+  const far = [{ start: 0, dur: 4000, text: 'Wir treffen uns morgen' }];
+  assert.equal(timing.align(far, [timed('wir treffen uns morgen', [8000, 8100, 8200, 8300])], 'de'), 0);
+  assert.equal(far[0].words, undefined, 'a donor outside the searched window is not used');
+});
+
 test('matching respects language-specific casing without removing meaningful accents', () => {
   const cues = [{ start: 0, dur: 4000, text: 'IŞIK güzel.' }];
   assert.equal(timing.align(cues, [timed('ışık güzel', [0, 1000], 'tr')], 'tr'), 1);
@@ -239,6 +300,32 @@ test('automatic timing updates preserve pending Google preview and reject an old
   player.sendCues({ cues: [{ ...upgrade, text: 'Wrong stale caption.' }], aligned: true,
     translationUpdate: true, wordTimingUpdate: true, nonce });
   assert.equal(player.read().original, cue.text);
+});
+
+test('a partly matched sentence labels itself and marks only the estimated words', async () => {
+  const cue = { start: 0, dur: 4000, text: 'Wir treffen uns morgen um zehn Uhr',
+    trans: '我们明天十点见。', wordTimingSource: 'automatic-partial',
+    words: [
+      { t: 0, u: 'Wir ', s: 'caption' }, { t: 400, u: 'treffen ', s: 'caption' },
+      { t: 800, u: 'uns ', s: 'caption' }, { t: 1300, u: 'morgen ', s: 'estimated' },
+      { t: 2000, u: 'um ', s: 'caption' }, { t: 2400, u: 'zehn ', s: 'caption' },
+      { t: 2800, u: 'Uhr', s: 'caption' }
+    ] };
+  const player = await mountContent({ cues: [cue] });
+  player.at(2.5);
+  assert.equal(player.status().wordTiming, 'automatic-partial');
+  assert.equal(player.activeWordIdx(), 5, 'the highlight still follows the real times');
+  const estimated = player.wordSpans().map((s) => s.classList.contains('ytds-w-est'));
+  assert.deepEqual(estimated, [false, false, false, true, false, false, false],
+    'only the estimated word is marked');
+  assert.equal(player.originalEl().getAttribute('data-ytds-timing-label'), '部分匹配 + 估算');
+
+  // "Approximate progress" off means reliable word times only, and this
+  // sentence needs estimation for its gap words.
+  const strict = await mountContent({ cues: [cue], settings: { karaokeApproximate: false } });
+  strict.at(2.5);
+  assert.equal(strict.status().wordTiming, 'unavailable');
+  assert.equal(strict.activeWordIdx(), -1);
 });
 
 test('timing-source metadata survives cache restoration and estimation never changes SRT', async () => {

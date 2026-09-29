@@ -20,6 +20,7 @@ function element() {
   // highlight and the reveal modes put on an element, and so className and
   // classList stay consistent the way they do in the browser.
   const classes = new Set();
+  const attrs = new Map();
   let ownText = '';
   const elementListeners = {};
   const el = {
@@ -52,7 +53,9 @@ function element() {
         fn({ type, target: this, stopPropagation() {}, preventDefault() {}, ...extra });
       }
     },
-    setAttribute() {}, click() {}, remove() {}
+    setAttribute(name, value) { attrs.set(name, String(value)); },
+    getAttribute(name) { return attrs.has(name) ? attrs.get(name) : null; },
+    click() {}, remove() {}
   };
   Object.defineProperty(el, 'textContent', {
     configurable: true,
