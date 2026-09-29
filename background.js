@@ -115,6 +115,9 @@ function recorderSnapshot() {
   return {
     state: recog.state,
     message: recog.message,
+    // The tab a capture belongs to: the popup shows a session only for the tab
+    // it is about, and stopping has to reach the right page.
+    tabId: recog.tabId,
     videoKey: recog.videoKey,
     cueCount: recog.cueCount,
     dropped: recog.dropped,

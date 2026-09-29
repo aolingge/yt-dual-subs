@@ -297,6 +297,7 @@
   "recogFailed": { "message": "Speech recognition failed." },
   "recogNotConfigured": { "message": "Fill in the local service address and token first." },
   "recogReady": { "message": "Ready: this video has no caption track." },
+  "recogOtherTab": { "message": "Another tab is being recognized. Stop it there first." },
   "recogTesting": { "message": "Checking the local service…" },
   "recogHealthOk": { "message": "Connected to the local service" },
   "recogHealthFail": { "message": "Connection failed: " },

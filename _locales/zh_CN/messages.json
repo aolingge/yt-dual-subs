@@ -297,6 +297,7 @@
   "recogFailed": { "message": "语音识别失败。" },
   "recogNotConfigured": { "message": "先填写本机服务地址和令牌。" },
   "recogReady": { "message": "可以开始：该视频没有字幕轨。" },
+  "recogOtherTab": { "message": "另一个标签页正在识别，请先在那里停止。" },
   "recogTesting": { "message": "正在检查本机服务…" },
   "recogHealthOk": { "message": "已连接本机服务" },
   "recogHealthFail": { "message": "连接失败：" },

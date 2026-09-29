@@ -297,6 +297,7 @@
   "recogFailed": { "message": "語音辨識失敗。" },
   "recogNotConfigured": { "message": "請先填入本機服務位址與權杖。" },
   "recogReady": { "message": "可以開始：這部影片沒有字幕軌。" },
+  "recogOtherTab": { "message": "另一個分頁正在辨識，請先在該分頁停止。" },
   "recogTesting": { "message": "正在檢查本機服務…" },
   "recogHealthOk": { "message": "已連線本機服務" },
   "recogHealthFail": { "message": "連線失敗：" },

@@ -495,15 +495,22 @@ function recogGateText(s) {
   return t("recogUnknownCaptions", "还没有确认该视频有没有字幕轨，请先播放几秒或切换一次字幕轨。");
 }
 
-function renderRecognizerCard(s) {
+async function renderRecognizerCard(s, tabId) {
   const base = $("bridgeBase");
   const token = $("bridgeToken");
   const state = s && s.recognitionState ? String(s.recognitionState) : "";
-  const running = state === "running" || state === "starting";
-  const configured = !!String(state.bridgeBase || "").trim() && !!String(state.bridgeToken || "").trim();
+  // A capture belongs to one tab. Looking at another video must not show the
+  // first one's session, and the stop button must belong to what is on screen.
+  const background = await sendToBackground({ type: "recogStatus" });
+  const recorder = (background && background.recorder) || null;
+  const otherTab = !!(recorder && recorder.tabId != null && tabId != null && recorder.tabId !== tabId);
+  const shown = otherTab ? "" : state;
+  const running = shown === "running" || shown === "starting";
+  const configured = !!String((s && s.bridgeBase) || "").trim() &&
+    !!String((s && s.bridgeToken) || "").trim();
 
-  if (base && base.value !== String(state.bridgeBase || "")) base.value = String(state.bridgeBase || "");
-  if (token && token.value !== String(state.bridgeToken || "")) token.value = String(state.bridgeToken || "");
+  if (base && base.value !== String((s && s.bridgeBase) || "")) base.value = String((s && s.bridgeBase) || "");
+  if (token && token.value !== String((s && s.bridgeToken) || "")) token.value = String((s && s.bridgeToken) || "");
 
   const start = $("recogStart");
   const stop = $("recogStop");
@@ -511,7 +518,7 @@ function renderRecognizerCard(s) {
   const gate = recogGateText(s);
   if (start) {
     start.hidden = running;
-    start.disabled = !configured || !gate;
+    start.disabled = !configured || !gate || otherTab;
   }
   if (stop) stop.hidden = !running;
   if (test) test.disabled = !configured;
@@ -519,10 +526,11 @@ function renderRecognizerCard(s) {
   const el = $("recogStatus");
   if (el) {
     const parts = [];
-    if (s && s.recognitionMessage) parts.push(String(s.recognitionMessage));
+    if (otherTab) parts.push(t("recogOtherTab", "另一个标签页正在识别，请先在那里停止。"));
+    else if (s && s.recognitionMessage) parts.push(String(s.recognitionMessage));
     else if (gate) parts.push(gate);
     else if (running) parts.push(t("recogRunning", "正在识别当前标签页的音频…"));
-    else if (state === "failed") parts.push(t("recogFailed", "语音识别失败。"));
+    else if (shown === "failed") parts.push(t("recogFailed", "语音识别失败。"));
     else if (!configured) parts.push(t("recogNotConfigured", "先填写本机服务地址和令牌。"));
     else parts.push(t("recogReady", "可以开始：该视频没有字幕轨。"));
     const line = parts.filter(Boolean).join("　");
@@ -605,7 +613,7 @@ async function refreshStatus() {
   el.textContent = statusText(resp);
   el.hidden = false;
   renderBiliCard(resp);
-  renderRecognizerCard(resp);
+  await renderRecognizerCard(resp, tab && tab.id);
   const timing = $("karaokeStatus");
   const labels = {
     captions: t("karaokeStatusCaptions", "跟读：使用原字幕词时间"),
