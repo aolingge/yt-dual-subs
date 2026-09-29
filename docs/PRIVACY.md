@@ -2,7 +2,7 @@
 
 [Back to the README](../README.md) · [中文](#中文)
 
-These details describe version **3.9.0**. This extension has no analytics, advertising code, extension account, or developer-operated translation server. YouTube, Google, your browser, and dictionary websites have their own data practices.
+These details describe source version **3.9.1**. This extension has no analytics, advertising code, extension account, or developer-operated translation server. YouTube, Google, your browser, and dictionary websites have their own data practices.
 
 ## What leaves your browser
 
@@ -10,7 +10,7 @@ These details describe version **3.9.0**. This extension has no analytics, adver
 | --- | --- | --- |
 | Caption loading | YouTube | Requests for the video's original and translated caption tracks. The extension uses the player's existing caption request. |
 | Automatic word timing | YouTube | When word times are missing, a same-language automatic caption track may also be requested and matched locally. Disabling word highlighting skips this additional request. Approximate progress is calculated locally from sentence duration. No audio is captured, transcribed, or sent for this feature. |
-| Whole-sentence translation | YouTube, with Google fallback | Prefers a translated YouTube track. If it is still pending after 1.5 seconds or unavailable, Google receives the current sentence and a look-ahead of up to two sentences. |
+| Whole-sentence translation | YouTube, with Google fallback | Prefers a translated YouTube track. If it is still pending after 0.35 seconds or unavailable, Google receives the current sentence and a look-ahead of up to two sentences. |
 | Per-sentence translation | Google Translate endpoint | Sentence text, source language when known, and chosen target language. |
 | Fast display | YouTube and Google | Starts both paths immediately; Google can receive the current sentence and next two sentences while the YouTube track loads. |
 | Native-caption preview | Google | In any translation mode, visible native-caption text can be sent before the full source track is ready. |
@@ -21,7 +21,7 @@ Google translation uses `https://translate.googleapis.com/translate_a/single`, a
 
 ## What is stored
 
-- **Preferences:** `chrome.storage.sync`, for language, styles, layout, and study settings. Whether preferences sync between devices depends on the browser's extension-sync settings.
+- **Preferences:** language, styles, layout, and study settings are written to `chrome.storage.sync`. Unsynced edits and the next retry time are staged in `chrome.storage.local` under `settingsPendingV1`, so changes remain usable after closing the popup or reaching a sync limit. The background batches writes at least 2.5 seconds apart and resumes pending writes when active. Whether preferences sync between devices depends on the browser's extension-sync settings. Browser storage is separate from this GitHub repository.
 - **Saved sentences:** `chrome.storage.local`, under `studyCardsV1`. Cards contain the video ID/title, sentence timing and index, original text, available translation, source language, learned state, and save time. They do **not** sync automatically.
 - **Temporary caches:** caption and translation results can be kept in extension/page memory to reduce repeated requests. They are not sent to a project server.
 - **Exports:** SRT and saved-sentence JSON files are downloaded to the location your browser uses. You control whether those files are shared or synchronized elsewhere.
@@ -44,13 +44,13 @@ Only share the information needed to reproduce an issue. Public video links are 
 
 ## 中文
 
-本说明对应 **3.9.0**。扩展没有统计、广告代码、扩展账号或开发者运营的翻译服务器。YouTube、Google、浏览器和词典网站仍有各自的数据处理规则。
+本说明对应源码版本 **3.9.1**。扩展没有统计、广告代码、扩展账号或开发者运营的翻译服务器。YouTube、Google、浏览器和词典网站仍有各自的数据处理规则。
 
 ### 哪些内容会发送到外部
 
 - **字幕加载：**向 YouTube 请求视频原文字幕轨及译文轨，使用播放器已有的字幕请求。
 - **自动跟读时间：**原字幕缺少词时间时，可额外向 YouTube 请求同语言自动字幕，在本地匹配词时间。关闭逐词高亮后，新字幕请求不加载这条补充轨；近似跟读按句子时长在本地计算，本功能不采集、识别或上传音频。
-- **整句翻译：**优先使用 YouTube；译文等待超过 1.5 秒或不可用时，Google 可收到当前句及后两句。
+- **整句翻译：**优先使用 YouTube；译文等待超过 0.35 秒或不可用时，Google 可收到当前句及后两句。
 - **逐句翻译：**向 Google 发送字幕句子、已知的原文语言和目标语言。
 - **快速显示：**立即并行使用 YouTube 和 Google；等待整轨译文时，Google 可收到当前句及后两句。
 - **画面字幕预览：**完整原文轨尚未到达时，各模式都可能将播放器当前显示的原文发给 Google。
@@ -61,7 +61,7 @@ Google 翻译使用 `translate.googleapis.com` 的**非官方免费端点**，�
 
 ### 本地与同步存储
 
-**设置**保存在 `chrome.storage.sync`，包括语言、样式、布局和学习设置，是否跨设备同步取决于浏览器的扩展同步设置。
+**设置**包括语言、样式、布局和学习设置，写入 `chrome.storage.sync`。尚未同步的修改及下次重试时间会暂存在 `chrome.storage.local` 的 `settingsPendingV1` 中，关闭弹窗或遇到同步限流时仍可使用。后台将同步写入合并，至少间隔 2.5 秒，并在活动时恢复待同步值。是否跨设备同步取决于浏览器的扩展同步设置；浏览器存储与 GitHub 仓库互相独立。
 
 **收藏句子**保存在 `chrome.storage.local` 的 `studyCardsV1` 中，包含视频编号与标题、句子时间和序号、原文、可用译文、原文语言、掌握状态与收藏时间。收藏不会自动同步；字幕和翻译也可能使用临时内存缓存，减少重复请求。
 

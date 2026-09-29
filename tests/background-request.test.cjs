@@ -32,7 +32,7 @@ function mountBackground(fetch, { withTimers = false } = {}) {
     commands: { onCommand: { addListener() {} } },
     tabs: { query() {}, sendMessage() {} }
   };
-  const sandbox = { chrome, fetch, Map };
+  const sandbox = { chrome, fetch, Map, importScripts() {}, YtdsSettings: { startSync() {} } };
   if (withTimers) {
     sandbox.AbortController = FakeAbortController;
     sandbox.setTimeout = (fn, ms) => { timers.push({ fn, ms, cleared: false }); return timers.length; };

@@ -52,8 +52,7 @@
 
   // Storage writes must never throw: several run from click handlers and timers.
   function saveSettings(patch) {
-    try { chrome.storage.sync.set(patch); }
-    catch (_e) { extGone = true; }
+    YtdsSettings.set(patch).catch(() => { if (!extAlive()) extGone = true; });
   }
 
   // Background round-trips must never throw either. Returns false when the
@@ -310,7 +309,7 @@
         resolve();
       };
       try {
-        chrome.storage.sync.get({ ...DEFAULTS, fontSizeRepair20260926: false }, apply);
+        YtdsSettings.get({ ...DEFAULTS, fontSizeRepair20260926: false }, apply);
       } catch (_e) {
         extGone = true;
         resolve();                      // keep DEFAULTS; the page still renders
@@ -323,7 +322,7 @@
   // positive set is the single source of truth for the re-cue decision.
   const RECUE_KEYS = new Set(["backend", "targetLang"]);
 
-  chrome.storage.onChanged.addListener((changes, area) => {
+  YtdsSettings.onChanged((changes, area) => {
     if (area !== "sync") return;
     let needRecue = false;
     let enabledChanged = false;

@@ -1,5 +1,5 @@
 // popup.js
-// Loads/saves settings to chrome.storage.sync; content.js applies them live.
+// Locally stage settings, then batch browser sync writes; content.js applies them live.
 // The live preview uses the SAME font map + rgba/outline logic as content.js.
 
 // ---- shared settings model (MUST match content.js DEFAULTS) --------------
@@ -165,8 +165,23 @@ const LINE = {
 function setKey(key, val) {
   state[key] = val;
   const o = {}; o[key] = val;
-  chrome.storage.sync.set(o);
+  persistSettings(o);
   paintPreview();
+}
+
+async function persistSettings(patch) {
+  const message = $("settingsMsg");
+  try {
+    await YtdsSettings.set(patch);
+    if (message) message.hidden = true;
+    return true;
+  } catch (_e) {
+    if (message) {
+      message.textContent = t("settingsSaveFailed", "设置保存失败，请重新打开扩展后重试。");
+      message.hidden = false;
+    }
+    return false;
+  }
 }
 
 // ---- live preview (mirrors content.js styleOverlay) ----------------------
@@ -451,7 +466,7 @@ function wire() {
       return;
     }
     try {
-      await chrome.storage.sync.set({ targetLang: code });
+      if (!await persistSettings({ targetLang: code })) throw new Error("Settings were not saved");
       state.targetLang = code;
       bindUI();
       message.textContent = t("targetCustomDone", "目标语言已设置：") + " " + code;
@@ -485,7 +500,7 @@ function wire() {
     b.addEventListener("click", () => {
       state.position = b.dataset.val;
       state.posMode = "preset";
-      chrome.storage.sync.set({ position: state.position, posMode: "preset" });
+      persistSettings({ position: state.position, posMode: "preset" });
       paintSegs(); paintPreview();
     }));
   $("resetPos").addEventListener("click", () => {
@@ -566,7 +581,7 @@ function wire() {
   // reset all
   $("reset").addEventListener("click", () => {
     state = { ...DEFAULTS };
-    chrome.storage.sync.set(DEFAULTS);
+    persistSettings(DEFAULTS);
     bindUI();
     showLiveMsg("", null);
   });
@@ -679,13 +694,13 @@ function showVersion() {
 }
 
 // ---- boot ----------------------------------------------------------------
-chrome.storage.onChanged.addListener((changes, area) => {
+YtdsSettings.onChanged((changes, area) => {
   if (area !== "sync" || !("overlayWidthPct" in changes)) return;
   state.overlayWidthPct = changes.overlayWidthPct.newValue || 0;
   paintWidthControl(); paintPreview();
 });
 applyI18n();                       // localize static markup before first paint
-chrome.storage.sync.get(DEFAULTS, (got) => {
+YtdsSettings.get(DEFAULTS, (got) => {
   state = { ...DEFAULTS, ...got };
   // migrate legacy global bgOpacity onto per-line defaults
   if (typeof got.bgOpacity === "number") {

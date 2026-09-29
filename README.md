@@ -8,14 +8,14 @@
 Original captions, translations, word lookup, and sentence practice — right on YouTube.</p>
 
 <p align="center">
-  <a href="https://github.com/aolingge/yt-dual-subs/releases/latest">Download the latest version</a> ·
+  <a href="https://github.com/aolingge/yt-dual-subs/archive/refs/heads/main.zip">Download current source</a> ·
   <a href="#install">Install</a> ·
   <a href="README.zh-CN.md">中文说明</a> ·
   <a href="https://github.com/aolingge/yt-dual-subs/issues">Report an issue</a>
 </p>
 
 <p align="center">
-  <img alt="Version 3.9.0" src="https://img.shields.io/badge/version-3.9.0-3ea6ff" />
+  <img alt="Source version 3.9.1" src="https://img.shields.io/badge/source-3.9.1-3ea6ff" />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -65,9 +65,11 @@ Approximate progress is enabled by default. Turn off **Use approximate progress 
 
 In **Study → Word highlight style**, adjust the background color, highlighted text color, and background opacity with a live preview. The default is a 95% opaque gold background with dark text; at 100%, the video does not show through the highlighted background.
 
-![The complete German sentence remains visible while Spaziergang is highlighted](docs/images/spoken-word-highlighting.png)
+![Chinese settings for word highlight color, text color, and opacity](docs/images/highlight-style-settings.png)
 
-*Actual v3.9.0 interface using controlled caption timestamps and a playing demo video. This illustrates the feature, not measured alignment to German speech.*
+![The complete German sentence stays visible with a high-contrast highlight over a bright video scene](docs/images/high-contrast-subtitles.png)
+
+*Actual v3.9.1 interface using controlled caption timestamps and a demo video. This illustrates the feature, not measured alignment to German speech.*
 
 This works across supported caption languages and needs no API key or setup per video. Videos must provide usable captions. Even automatic-caption timestamps can be imperfect; approximate progress is a reading aid, not precise speech alignment. The extension does not transcribe audio, so it cannot guarantee exact word following for every video or create missing captions.
 
@@ -86,14 +88,16 @@ This works across supported caption languages and needs no API key or setup per 
 
 For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load unpacked**.
 
-1. [Download yt-dual-subs-3.9.0.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.9.0/yt-dual-subs-3.9.0.zip) and extract it to a folder you will keep.
+1. [Download the current source ZIP](https://github.com/aolingge/yt-dual-subs/archive/refs/heads/main.zip) and extract it to a folder you will keep.
 2. Open `edge://extensions` in Edge, or `chrome://extensions` in Chrome.
 3. Turn on **Developer mode**, then click **Load unpacked**.
-4. Select the extracted **yt-dual-subs** folder — the one containing `manifest.json`.
+4. Select the extracted **yt-dual-subs-main** folder — the one containing `manifest.json`.
 5. Open a YouTube video with captions. The extension normally turns CC on for you; you can disable that option.
 6. Pin the toolbar icon, open its popup, and choose your target language.
 
 **Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
+
+The current source is **3.9.1**, including configurable high-contrast highlights, automatic caption recovery, faster translation fallback, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these fixes. See the [3.9.1 update notes](docs/releases/v3.9.1.md).
 
 Browser references: [Edge sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome unpacked extension guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked).
 
@@ -162,6 +166,13 @@ No. It uses YouTube's caption data or visible native-caption text. It does not p
 </details>
 
 <details>
+<summary><strong>Why did changing colors or sliders cause a storage quota error?</strong></summary>
+
+Older code wrote to browser sync storage for every input event. Version 3.9.1 applies and saves changes locally first, then merges sync writes at least 2.5 seconds apart. The last edit survives closing the popup. If sync is temporarily limited, local preferences stay usable and the background retries when active; cross-device sync still depends on your browser settings. After updating, clear the historical extension error and check whether it recurs.
+
+</details>
+
+<details>
 <summary><strong>Does hover mean a word, or the whole translation line?</strong></summary>
 
 They are separate features. **Word lookup** queries the word under the pointer. **Translation → On hover** in Study settings reveals the translated subtitle when the pointer is inside the player; it hides when the pointer leaves the player or browser window. You can disable word lookup independently.
@@ -180,7 +191,7 @@ Translated and bilingual export checks for missing or misaligned spoken lines. I
 - No extension analytics or tracking, and no extension account.
 - Translation sends caption text to YouTube or Google; hover lookup sends the hovered word to Google. The Google endpoint is unofficial and may be rate-limited.
 - German Assistant receives the word only when you click the dictionary link.
-- Settings use browser extension sync storage. **Saved sentences are local** and do not sync automatically; use **Export saved / Import saved** for backups and transfers. Uninstalling clears local extension data.
+- Settings are staged locally and then written to browser extension sync storage. **Saved sentences are local** and do not sync automatically; use **Export saved / Import saved** for backups and transfers. Uninstalling clears local extension data.
 
 Read the [full privacy and permission details](docs/PRIVACY.md).
 
@@ -188,7 +199,7 @@ Read the [full privacy and permission details](docs/PRIVACY.md).
 
 Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
 
-Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [v3.9.0 release notes](docs/releases/v3.9.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.9.1 update notes](docs/releases/v3.9.1.md). If it helps your learning, a GitHub star makes the project easier for others to find.
 
 ## Credits and license
 

@@ -50,10 +50,14 @@ async function mountCues(cues, aligned = true, tcues = null,
     runtime: {
       id: 'test-extension-id',
       onMessage: { addListener(fn) { listeners.runtimeMessage = fn; } },
-      sendMessage(message, done) { requests.push({ message, done }); }
+      sendMessage(message, done) {
+        if (message.type === 'saveSettings') { done({ ok: true }); return; }
+        requests.push({ message, done });
+      }
     },
     storage: {
       onChanged: { addListener(fn) { listeners.storageChanged = fn; } },
+      local: { get(_key, done) { done({}); } },
       sync: {
         get(defaults, done) { done({ ...defaults, backend, fontSizeRepair20260926: true }); },
         set() {}
@@ -69,6 +73,7 @@ async function mountCues(cues, aligned = true, tcues = null,
     setTimeout(fn) { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {}
   });
+  vm.runInContext(fs.readFileSync(path.join(root, 'settings.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(root, 'word-timing.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), context);
   await new Promise(setImmediate);

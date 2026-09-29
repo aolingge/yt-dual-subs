@@ -1,5 +1,6 @@
 {
   "extName": { "message": "YT Dual Subs" },
+  "settingsSaveFailed": { "message": "Settings could not be saved. Reopen the extension and try again." },
   "extDesc": { "message": "Bilingual subtitles for YouTube — original and translation in one non-overlapping layer." },
   "headerSub": { "message": "Bilingual subtitles · single layer" },
   "enableTitle": { "message": "Enable / disable" },

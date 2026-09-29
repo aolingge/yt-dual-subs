@@ -167,6 +167,7 @@ async function mountContent(options = {}) {
       onMessage: { addListener(fn) { listeners.runtimeMessage = fn; } },
       sendMessage(message, done) {
         if (state.dead) invalidated();
+        if (message.type === 'saveSettings') { storageWrites.push(message.patch); done({ ok: true }); return; }
         requests.push({ message, done });
       },
       getManifest() {
@@ -176,6 +177,7 @@ async function mountContent(options = {}) {
     },
     storage: {
       onChanged: { addListener(fn) { listeners.storageChanged = fn; } },
+      local: { get(_key, done) { done({}); } },
       sync: {
         get(defaults, done) {
           if (state.dead) invalidated();
@@ -204,6 +206,7 @@ async function mountContent(options = {}) {
     setTimeout(fn) { timeouts.push(fn); return timeouts.length; }, clearTimeout() {},
     setInterval(fn) { timers.push(fn); return timers.length; }, clearInterval() {}
   });
+  vm.runInContext(fs.readFileSync(path.join(root, 'settings.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(root, 'word-timing.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), context);
   await new Promise(setImmediate);

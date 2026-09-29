@@ -8,14 +8,14 @@
 原文与译文同时看，陌生单词悬停查，难句反复听，实用表达收藏起来。</p>
 
 <p align="center">
-  <a href="https://github.com/aolingge/yt-dual-subs/releases/latest">下载最新版</a> ·
+  <a href="https://github.com/aolingge/yt-dual-subs/archive/refs/heads/main.zip">下载最新源码</a> ·
   <a href="#安装">安装教程</a> ·
   <a href="README.md">English</a> ·
   <a href="https://github.com/aolingge/yt-dual-subs/issues">反馈问题</a>
 </p>
 
 <p align="center">
-  <img alt="版本 3.9.0" src="https://img.shields.io/badge/version-3.9.0-3ea6ff" />
+  <img alt="源码版本 3.9.1" src="https://img.shields.io/badge/source-3.9.1-3ea6ff" />
   <a href="LICENSE"><img alt="MIT 开源许可" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Chrome 和 Edge 桌面浏览器" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="无需 API 密钥" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -65,9 +65,11 @@
 
 在**学习 → 跟读高亮样式**中，可以分别调整高亮背景颜色、文字颜色和背景不透明度，并即时预览。默认使用 95% 不透明的金黄色背景与深色文字；调到 100% 后，视频不会透过高亮背景。
 
-![完整德语原文保持显示，播放到 Spaziergang 时高亮该词](docs/images/spoken-word-highlighting.png)
+![中文跟读高亮设置：背景颜色、文字颜色及不透明度](docs/images/highlight-style-settings.png)
 
-*图中是 3.9.0 实际界面，使用受控字幕时间与正在播放的演示视频，展示功能操作；没有测量与德语语音的实际对齐精度。*
+![明亮视频画面上的高对比度跟读高亮，德语整句保持完整显示](docs/images/high-contrast-subtitles.png)
+
+*图中是 3.9.1 实际界面，使用受控字幕时间与演示视频，展示功能操作；没有测量与德语语音的实际对齐精度。*
 
 各字幕语言都使用这套流程，无需为每个视频设置，也不要求 API 密钥。视频需要有可用字幕；自动字幕自身的词时间也可能有误差。近似跟读只是阅读辅助，不能代表精确朗读时间。扩展当前不识别音频，因此不能保证所有视频精确逐词跟随，也无法凭空生成缺失的字幕。
 
@@ -82,20 +84,22 @@
   </tr>
 </table>
 
-*设置界面支持中文、繁体中文和英文；示例截图使用英文界面。*
+*设置界面支持中文、繁体中文和英文；上方的学习与布局截图使用英文界面。*
 
 ## 安装
 
 支持 **Chrome、Microsoft Edge 桌面浏览器**。当前通过**加载已解压的扩展**安装。
 
-1. [下载 yt-dual-subs-3.9.0.zip](https://github.com/aolingge/yt-dual-subs/releases/download/v3.9.0/yt-dual-subs-3.9.0.zip)，解压到一个准备长期保留的文件夹。
+1. [下载最新源码 ZIP](https://github.com/aolingge/yt-dual-subs/archive/refs/heads/main.zip)，解压到一个准备长期保留的文件夹。
 2. Edge 打开 `edge://extensions`；Chrome 打开 `chrome://extensions`。
 3. 开启**开发者模式**，点击**加载已解压的扩展程序**。
-4. 选择解压后的 **yt-dual-subs** 文件夹，即包含 `manifest.json` 的那一层。
+4. 选择解压后的 **yt-dual-subs-main** 文件夹，即包含 `manifest.json` 的那一层。
 5. 打开一个有字幕的 YouTube 视频。扩展默认帮你开启 CC，也可在设置中关闭自动开启。
 6. 将扩展固定到工具栏，打开弹窗，选择译文目标语言。
 
 **更新时：**将新版文件覆盖到同一个扩展文件夹，在扩展管理页点击重新加载，然后**刷新已打开的 YouTube 标签页**。收藏句子保存在扩展本地；卸载前请[导出收藏备份](#隐私与数据)。
+
+当前源码为 **3.9.1**，包含可调高对比度高亮、字幕自动恢复、翻译加速及设置合并保存。[最新发行包](https://github.com/aolingge/yt-dual-subs/releases/latest)仍为 **3.9.0**；要使用这些修复，请下载源码 ZIP 或使用 Git 克隆。可查看 [3.9.1 更新说明](docs/releases/v3.9.1.md#中文)。
 
 浏览器官方教程：[Edge 本地加载扩展](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome 加载已解压扩展](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)。
 
@@ -164,6 +168,13 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 </details>
 
 <details>
+<summary><strong>调整颜色或滑块时，为什么报设置写入超额？</strong></summary>
+
+旧代码每收到一次输入事件就写入浏览器同步存储。3.9.1 会先在本地保存并即时应用，再合并同步写入，两次同步至少间隔 2.5 秒；关闭弹窗也会保留最后的设置。遇到同步限流时，本地设置仍可使用，后台活动时会补存；跨设备同步取决于浏览器设置。更新后可清除扩展管理页中的历史错误，再观察是否出现新记录。
+
+</details>
+
+<details>
 <summary><strong>“悬停查词”和“悬停显示译文”有什么区别？</strong></summary>
 
 **查词**查询鼠标指向的单词。学习设置里的**译文显示 → 悬停**，则在鼠标进入播放器时显示整行译文，离开播放器或浏览器窗口时隐藏。两项功能可以分别设置。
@@ -182,7 +193,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 - 扩展不加入统计或追踪，不要求扩展账号。
 - 翻译会将字幕文本发送到 YouTube 或 Google；悬停查词会向 Google 发送当前单词。Google 免费端点是非官方接口，可能被限流。
 - 德语助手只在你点击词典链接后收到该词。
-- 设置使用浏览器扩展同步存储；**收藏句子仅存在本地，不会自动同步**。使用**导出收藏 / 导入收藏**备份和迁移，卸载扩展会清除本地数据。
+- 设置先暂存在本地，再写入浏览器扩展同步存储；**收藏句子仅存在本地，不会自动同步**。使用**导出收藏 / 导入收藏**备份和迁移，卸载扩展会清除本地数据。
 
 查看[完整隐私与权限说明](docs/PRIVACY.md#中文)。
 
@@ -190,7 +201,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 
 遇到问题可[提交 Issue](https://github.com/aolingge/yt-dual-subs/issues)，说明浏览器与扩展版本、字幕语言、翻译模式和复现步骤。有帮助时可附公开视频链接，请勿上传个人信息。
 
-欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.9.0 更新说明](docs/releases/v3.9.0.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
+欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.9.1 更新说明](docs/releases/v3.9.1.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
 
 ## 致谢与许可
 

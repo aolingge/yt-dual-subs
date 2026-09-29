@@ -16,7 +16,7 @@ test('known subtitle language is used for short-sentence translation and cache i
     return { ok: true, json: async () => [[['你好。']]] };
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8'), {
-    chrome, fetch, Map
+    chrome, fetch, Map, importScripts() {}, YtdsSettings: { startSync() {} }
   });
   const request = (sourceLang, targetLang = 'zh-CN') => new Promise((resolve) => {
     listeners.message({ type: 'translate', text: 'Hallo.',

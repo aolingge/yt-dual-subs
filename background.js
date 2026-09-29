@@ -2,6 +2,9 @@
 // Routes cross-origin translation requests here so host_permissions apply
 // and content scripts never hit page-CORS restrictions.
 
+importScripts("settings.js");
+YtdsSettings.startSync();
+
 const CACHE = new Map();          // key: `${sl}\u0000${tl}\u0000${text}` -> translated string
 const CACHE_MAX = 2000;           // simple LRU-ish cap
 const INFLIGHT = new Map();      // native preview and cue mode may ask for the same sentence
@@ -88,6 +91,12 @@ async function translate(text, targetLang, sourceLang) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg && msg.type === "saveSettings") {
+    YtdsSettings.enqueue(msg.patch)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: String(err) }));
+    return true; // persist locally before acknowledging, even if the popup closes
+  }
   if (msg && msg.type === "translate") {
     translate(msg.text, msg.targetLang, msg.sourceLang)
       .then((translated) => sendResponse({ ok: true, translated }))

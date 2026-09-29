@@ -19,8 +19,9 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 | --- | --- |
 | `inject.js` | Page-world caption capture; original/translated track loading and optional same-language automatic timing track. |
 | `word-timing.js` | Shared Unicode word segmentation, timestamp validation, conservative lexical matching, and display-only estimation. Loaded before the bridge/renderer in their respective worlds. |
+| `settings.js` | Shared preference reads/live changes and durable local staging; the existing worker merges sync writes with quota backoff. |
 | `content.js` | Video-clock caption rendering, sentence grouping, native-caption fallback, word lookup, drag/resize, player controls, and study messages. |
-| `background.js` | Google translation requests, deduplication, caching, deadlines, and shortcut dispatch. |
+| `background.js` | Google translation requests, deduplication, caching, deadlines, preference-save messages, and shortcut dispatch. |
 | `popup.html`, `popup.css`, `popup.js` | Settings, preview, status, current-video actions, and SRT export. |
 | `study.js` | Transcript browsing, saved cards, review, and JSON backup/import. |
 | `content.css` | Subtitle layout, lookup card, resize grips, and native-caption suppression. |
@@ -46,7 +47,7 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 - **User interaction:** selecting words and resizing the box must not click/pause the player. Hover reveal must hide when the pointer leaves the player/window.
 - **Responsive preferences:** fitting a smaller player must not overwrite saved font sizes or positions. Persist manual width as a percentage; leave room for player controls.
 - **Language isolation:** translation cache keys include source language, target language, and text. Unknown source language can fall back to detection.
-- **Storage:** resetting subtitle preferences must preserve saved cards. Imports merge validated cards without deleting the existing collection.
+- **Storage:** popup/content scripts send preference patches to the worker through `settings.js`; only the worker writes sync preferences. `settingsPendingV1` locally stages edits and the next allowed sync time. Immediate local events update overlays, and delayed sync events must not overwrite pending values or repeat those updates. Writes are serialized, coalesced after 250ms, and spaced by at least 2.5s across worker restarts. Minute/hour quota failures wait 61s/3601s; suspended workers resume on their next activation. Resetting preferences preserves saved cards. Imports merge validated cards without deleting the existing collection.
 - **Export integrity:** translated/bilingual SRT must not silently omit missing or misaligned spoken lines.
 - **Timing provenance:** retain native/matched metadata through grouping and video caches. Estimated times are rendering data, never inserted into raw cues or SRT. Late timing updates must not restart sentence repeat, hide a manually revealed translation, or discard a pending fast translation.
 
@@ -64,15 +65,16 @@ For a focused check:
 node --test tests/latency.test.cjs tests/startup.test.cjs
 node --test tests/layout.test.cjs tests/resize.test.cjs
 node --test tests/word-timing.test.cjs tests/study.test.cjs
+node --test tests/settings.test.cjs
 ```
 
-The suites execute the shipping scripts inside a VM with simulated DOM and extension APIs. They cover startup, clock alignment, source recovery, translation languages, deadlines, layout, selection, resize, shortcuts, study, and extension reloads.
+The suites execute the shipping scripts inside a VM with simulated DOM and extension APIs. They cover startup, clock alignment, source recovery, translation languages, deadlines, layout, selection, resize, shortcuts, study, extension reloads, and staged preference recovery after sync quotas or worker suspension.
 
 **Browser validation has a separate scope.** Isolated Edge checks with synthetic YouTube fixtures exercise the actual extension UI, but are not proof that every live YouTube video works. A real translation endpoint responding once is not a latency guarantee. After behavior changes, check a captioned live video when available and report unavailable or unverified cases explicitly.
 
 ## Documentation screenshots
 
-Most images in `docs/images/` use the real v3.8.1 interface with an original illustrated lake scene and sample German/Chinese captions. `spoken-word-highlighting.png` shows v3.9.0 with controlled caption timestamps and a real playing media clock. These are demonstration fixtures, not live YouTube screenshots or measured alignment to German speech. The original word-lookup capture used the live Google endpoint; the v3.9.0 regression fixture stubs lookup responses.
+Most images in `docs/images/` use the real v3.8.1 interface with an original illustrated lake scene and sample German/Chinese captions. `spoken-word-highlighting.png` shows v3.9.0 with controlled caption timestamps and a real playing media clock. `high-contrast-subtitles.png` and `highlight-style-settings.png` show v3.9.1's actual overlay and Chinese highlight controls over a controlled bright-paper scene. These are demonstration fixtures, not live YouTube screenshots or measured alignment to German speech. The original word-lookup capture used the live Google endpoint; the v3.9.0 regression fixture stubs lookup responses.
 
 ## Submit a change
 

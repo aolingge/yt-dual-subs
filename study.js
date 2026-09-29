@@ -376,7 +376,7 @@
       studyRate: 0.75, repeatCount: 0
     };
     try {
-      await chrome.storage.sync.set(preset);
+      await YtdsSettings.set(preset);
       Object.assign(state, preset);
       bindUI();
       say(t("studyPresetDone", "学习预设已启用，目标语言保持不变；请确认原文字幕轨。"), "ok");

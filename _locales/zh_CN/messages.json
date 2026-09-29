@@ -1,5 +1,6 @@
 {
   "extName": { "message": "YT Dual Subs" },
+  "settingsSaveFailed": { "message": "设置保存失败，请重新打开扩展后重试。" },
   "extDesc": { "message": "YouTube 双语字幕——原文与译文单层显示,互不重叠。" },
   "headerSub": { "message": "双语字幕 · 单层渲染" },
   "enableTitle": { "message": "启用 / 禁用" },

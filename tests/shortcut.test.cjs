@@ -27,9 +27,11 @@ async function loadContent(saved) {
   player.querySelector = () => null;
   const chrome = {
     i18n: { getMessage: () => '' },
-    runtime: { id: 'test-extension-id', onMessage: { addListener(fn) { listeners.message = fn; } } },
+    runtime: { id: 'test-extension-id', onMessage: { addListener(fn) { listeners.message = fn; } },
+      sendMessage(msg, done) { writes.push(msg.patch); done({ ok: true }); } },
     storage: {
       onChanged: { addListener(fn) { listeners.storageChanged = fn; } },
+      local: { get(_key, done) { done({}); } },
       sync: {
         get(defaults, done) { done({ ...defaults, ...saved }); },
         set(value) { writes.push(value); }
@@ -49,7 +51,9 @@ async function loadContent(saved) {
     setTimeout() { return 1; }, clearTimeout() {},
     setInterval() { return 1; }, clearInterval() {}
   };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), context);
+  const sandbox = vm.createContext(context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'settings.js'), 'utf8'), sandbox);
+  vm.runInContext(fs.readFileSync(path.join(root, 'content.js'), 'utf8'), sandbox);
   await new Promise(setImmediate);
   return { writes, messages, listeners, player };
 }
@@ -83,7 +87,9 @@ test('Alt+Shift+Y command is registered and sent only to the active tab', () => 
       sendMessage(id, message, done) { sent.push({ id, message }); done(); }
     }
   };
-  vm.runInNewContext(fs.readFileSync(path.join(root, 'background.js'), 'utf8'), { chrome, Map });
+  vm.runInNewContext(fs.readFileSync(path.join(root, 'background.js'), 'utf8'), {
+    chrome, Map, importScripts() {}, YtdsSettings: { startSync() {} }
+  });
   listeners.command('unrelated');
   assert.equal(sent.length, 0);
   listeners.command('toggle-translation');

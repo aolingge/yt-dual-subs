@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "default_locale": "en",
   "name": "__MSG_extName__",
-  "version": "3.9.0",
+  "version": "3.9.1",
   "description": "__MSG_extDesc__",
   "permissions": ["storage"],
   "host_permissions": [
@@ -41,7 +41,7 @@
     },
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["word-timing.js", "content.js"],
+      "js": ["settings.js", "word-timing.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_end",
       "all_frames": false
