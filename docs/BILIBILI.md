@@ -39,15 +39,38 @@ of scope and are not planned for this version:
 - **Bangumi, movies and other player systems** (`/bangumi/play/*` and similar),
   which use a different player and a different caption path.
 - **Mobile web and the mobile app.**
-- **Videos with no readable caption track.** Visible Chinese burned into the
-  picture is *not* a caption track. Use [subtitle-file import](#importing-a-local-subtitle-file)
-  instead; the extension does not read text out of the picture.
+- **Videos with no readable caption track** *and no local recognizer running.*
+  Visible Chinese burned into the picture is *not* a caption track. Use
+  [subtitle-file import](#importing-a-local-subtitle-file) instead, or start
+  speech recognition below; the extension does not read text out of the picture.
 - **Optical character recognition** of burned-in subtitles, and any promise to
   remove such text.
 - **German dubbing or audio replacement.** The German is a text translation; the
-  video's own audio is never touched.
-- **Speech recognition** for videos without captions. It is a possible later
-  phase and is not implemented here.
+  video's own audio is never touched, and it stays audible while recognition
+  captures it.
+- **Speech recognition without the Deutsch Overlay desktop program.** The
+  extension itself never calls a cloud service and never uploads audio: the
+  captured sound goes to a local bridge on `127.0.0.1` that runs the same local
+  models the desktop program already has. With no bridge running, the button
+  reports that it cannot reach it and nothing is captured.
+
+## Speech recognition for videos without captions
+
+When a video has no caption track at all, the popup offers **启用语音识别**. The
+capture is the current tab only (Bilibili Live is still out of scope), it starts
+only on an explicit click, and it runs through an offscreen document so closing
+the popup does not end the recording.
+
+- The recognition gate is strict: a readable track, a track that failed to
+  load, an unloaded page or an unknown state all block the start. A second copy
+  of subtitles the user already has is worse than no recognition at all.
+- The captions a video gets this way are the same German-above-Chinese cues as
+  a page track, and the popup labels them **语音识别** — never the uploader's
+  captions.
+- The Chinese word times the model reports are sentence/word times for the
+  Chinese original; they are **not** used to highlight German word by word.
+- Nothing is stored on disk by default. Stopping the capture, leaving the video
+  or closing the tab ends the session and drops the text.
 
 ## How the captions are read
 
@@ -118,11 +141,12 @@ The popup reports the actual state instead of an endless spinner:
 | --- | --- | --- |
 | 正在读取中文字幕… | Still reading | Wait; the reader retries a few times and then stops. |
 | 当前页面不是 B 站普通视频播放页。 | Live, bangumi or another player system | Not supported; see above. |
-| 该视频没有中文字幕轨，可改为导入 SRT 字幕文件。 | No Chinese caption track exists | Import a subtitle file, or pick another video. |
+| 该视频没有中文字幕轨，可改为导入 SRT 字幕文件。 | No Chinese caption track exists | Import a subtitle file, or start speech recognition. |
 | 该视频有字幕，但没有中文字幕轨。 | Captions exist, but none is Chinese | Not usable for Chinese → German. |
 | B 站只向已登录的用户提供该视频的字幕，请先登录 B 站并刷新页面。 | The site offers the track only to a signed-in viewer | Sign in to Bilibili in this browser, then refresh the page. |
 | 中文字幕读取失败。 | The caption request failed | Retry, or import a subtitle file. |
 | 此视频与分 P 还没有导入的字幕文件。 | A bound file was expected but is gone | Import it again. |
+| 另一个标签页正在识别，请先在那里停止。 | A capture is already running for another tab | Stop it there, or use that tab. |
 
 The overlay also keeps the Chinese original visible when a translation is slow
 or fails. It never shows the previous sentence's German while the current one is

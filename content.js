@@ -2639,7 +2639,7 @@
   }
 
   // =========================================================================
-  // LOCAL SUBTITLE FILE (Bilibili supplement)
+  // LOCAL SUBTITLE FILE
   // =========================================================================
   // When a video has no readable Chinese caption track, the user can bind an
   // SRT file to it. The file is kept in chrome.storage.local (never sync: it can
@@ -2694,6 +2694,16 @@
     });
   }
 
+  // An imported file is the user's own subtitle, so the only thing the display
+  // layer needs is which language it is in: the dictionary lookup, the
+  // translation direction and the cache key all read this one value.
+  function importedSourceLang() {
+    if (SITE && SITE.isBilibili) return "zh-CN";
+    const lang = sourceLanguageForRecognition();
+    if (lang === "auto") return "auto";
+    return lang === "zh" ? "zh-CN" : lang;
+  }
+
   // Hand the bound file to the SAME cue pipeline a caption track uses: the
   // original is shown immediately, the translation queue runs unchanged, and
   // play/pause/seek/fullscreen behave exactly as they do for page captions.
@@ -2706,7 +2716,7 @@
       tcues: null,
       aligned: null,
       translationPending: false,
-      sourceLang: "zh-CN",
+      sourceLang: importedSourceLang(),
       cueSource: CUE_SOURCE_IMPORT
     };
     importedSrtStatus = importedSrt.name || "";
@@ -2743,7 +2753,10 @@
   }
 
   async function handleImportSrt(msg) {
-    if (!SRT || !SITE || !SITE.isBilibili) return { ok: false, reason: "unsupported" };
+    // A file bound to a video is the same feature wherever the video lives; the
+    // storage key already carries the video and the part, so one site's file can
+    // never surface on another's video.
+    if (!SRT) return { ok: false, reason: "unsupported" };
     const text = typeof msg.text === "string" ? msg.text : "";
     if (!text) return { ok: false, reason: "empty" };
     if (text.length > SRT.MAX_BYTES) return { ok: false, reason: "toolarge" };

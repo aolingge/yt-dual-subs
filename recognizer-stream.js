@@ -206,7 +206,9 @@
         }
       });
       this.queue(work);
-      return this.writeChain;
+      // The caller needs a promise for THIS batch, not just for the chain: a
+      // caller that awaits the chain itself would race with its own work.
+      return work;
     }
 
     /** Ask for everything recognized since the last revision we saw. */
@@ -245,16 +247,18 @@
     /** Stop feeding audio and let the recognizer publish its final utterance. */
     async finish() {
       if (this.stopped) return { cues: this.cues, revision: this.revision, status: this.status };
-      if (this.queued.length) this.flush();
       const sessionId = this.sessionId;
-      this.sessionId = "";
       if (!sessionId) {
         this.stopped = true;
         this.stopTimer();
         return { cues: this.cues, revision: this.revision, status: this.status };
       }
       const work = async () => {
+        // Everything still queued belongs to this session, and the session id
+        // is cleared on the way out: a flush that ran after that would post to
+        // /v1/session//audio and lose the audio silently.
         try {
+          if (this.queued.length) await this.flush();
           const response = await this.bridge.finish(sessionId);
           this.consume(response);
         } catch (_e) { /* the tail is best effort; the cues so far stand */ }
@@ -267,6 +271,7 @@
               !merged.added && !merged.updated) break;
         }
         try { await this.bridge.close(sessionId); } catch (_e) { /* best effort */ }
+        this.sessionId = "";
       };
       await this.queue(work);
       this.stopped = true;

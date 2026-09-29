@@ -636,8 +636,21 @@ test('the imported file rides the same cue pipeline as a caption track', () => {
   assert.match(call, /aligned: null/);
   assert.match(call, /tcues: null/);
   assert.match(call, /translationPending: false/);
-  assert.match(call, /sourceLang: "zh-CN"/);
+  // The language of the file decides the dictionary lookup and the translation
+  // direction, and it is the same answer on every site.
+  assert.match(call, /sourceLang: importedSourceLang\(\)/);
   assert.match(call, /onCues\(data\)/);
+});
+
+test('an imported file is usable on either site and says which language it is', () => {
+  const content = read('content.js');
+  const start = content.indexOf('function importedSourceLang()');
+  assert.ok(start > 0, 'the imported-file language helper exists');
+  const body = content.slice(start, content.indexOf('\n  }', start));
+  assert.match(body, /SITE\.isBilibili\) return "zh-CN"/);
+  const handler = content.slice(content.indexOf('async function handleImportSrt(msg)'));
+  assert.match(handler.slice(0, handler.indexOf('\n  }')), /if \(!SRT\) return \{ ok: false, reason: "unsupported" \}/);
+  assert.doesNotMatch(handler.slice(0, handler.indexOf('\n  }')), /isBilibili/);
 });
 
 test('a bound file outranks the page and can be unbound', () => {
