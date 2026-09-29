@@ -152,7 +152,7 @@ test('a measured pace is taken from timed cues, clamped, and needs three samples
     'de'), null, 'two samples are not enough');
   assert.equal(Math.round(timing.speakingRate([
     paced(0, [0, 400, 800]), paced(2000, [2000, 2400, 2800]), paced(4000, [4000, 4400, 4800])],
-  'de')), 240);
+  'de')), 200, 'each known 400ms word interval has two syllables; the last duration is unknown');
   assert.equal(timing.speakingRate([
     { start: 0, dur: 40000, text: 'Hallo schöne Welt.', words: [{ t: 0, u: 'Hallo' },
       { t: 10000, u: 'schöne' }, { t: 20000, u: 'Welt' }] },
@@ -181,6 +181,25 @@ test('the video\'s own measured pace reshapes the estimate while it plays', asyn
   assert.equal(measured.status().wordTiming, 'estimated');
   assert.equal(measured.activeWordIdx(), 0, 'the speaker\'s slow pace is used');
   assert.equal(plain.activeWordIdx(), 1, 'without samples the default pace applies');
+});
+
+test('all estimated words fit within a very short caption instead of piling up at its end', () => {
+  const cue = { start: 2300, dur: 500,
+    text: 'Wir lernen heute gemeinsam sehr ausführliche deutsche Wörter und schwierige grammatische Regeln.' };
+  const pieces = timing.estimate(cue, 'de');
+  assert.equal(pieces.map(p => p.u).join(''), cue.text);
+  assert.ok(pieces.every(p => p.t >= cue.start && p.t < cue.start + cue.dur));
+  assert.ok(pieces.every((p, i) => i === 0 || p.t > pieces[i - 1].t), 'every word has its own reachable start');
+});
+
+test('caption trailing silence and punctuation pauses cannot slow the measured word pace', () => {
+  const cues = dur => [0, 6000, 12000].map(start => ({ start, dur, text: 'Hallo schöne Welt.',
+    words: [{ t: start, u: 'Hallo' }, { t: start + 400, u: 'schöne' }, { t: start + 800, u: 'Welt' }] }));
+  assert.equal(timing.speakingRate(cues(1200), 'de'), timing.speakingRate(cues(5000), 'de'));
+  const paused = [0, 6000, 12000].map(start => ({ start, dur: 5000, text: 'Hallo, schöne große Welt.',
+    words: [{ t: start, u: 'Hallo,' }, { t: start + 1400, u: 'schöne' },
+      { t: start + 1800, u: 'große' }, { t: start + 2200, u: 'Welt.' }] }));
+  assert.equal(timing.speakingRate(paused, 'de'), 200, 'punctuation includes a pause, not slower words');
 });
 
 test('late automatic times upgrade the current sentence without resetting reveal or translation', async () => {

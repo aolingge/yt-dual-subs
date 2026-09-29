@@ -127,7 +127,7 @@
     // A caption cue can carry trailing silence, so never stretch the words past
     // 1.4x their natural length to fill one; squeeze them when the cue is too
     // short for its text.
-    const scale = Math.min(1.4, Math.max(0.35, (end - cue.start) / speech));
+    const scale = Math.min(1.4, (end - cue.start) / speech);
     let at = cue.start;
     const times = spans.map((span) => {
       const t = at;
@@ -143,15 +143,23 @@
     const rates = [];
     for (const cue of Array.isArray(cues) ? cues : []) {
       if (rates.length >= 60) break;
-      if (!captionPieces(cue, language)) continue;
+      const pieces = captionPieces(cue, language);
+      if (!pieces) continue;
       const parts = tokens(String(cue.text || ""), language);
-      const first = Array.isArray(cue.words) && cue.words.length
-        ? cue.words[0].t : NaN;
-      const end = Number.isFinite(cue.end) ? cue.end : cue.start + cue.dur;
-      if (!Number.isFinite(first) || !(end > first) || first < cue.start - 50) continue;
-      const count = parts.reduce((sum, p) => sum + syllables(p.text, language), 0);
+      // Caption end can include seconds of silence. Measure only intervals
+      // between known word starts, leaving the final word's duration unknown.
+      // Punctuation gaps include pauses rather than the speaker's word pace.
+      let duration = 0, count = 0;
+      for (let i = 0; i + 1 < parts.length; i++) {
+        const gap = cue.text.slice(parts[i].index + parts[i].text.length, parts[i + 1].index);
+        if (pauseAfter(gap, parts[i].text)) continue;
+        const elapsed = pieces[i + 1].t - pieces[i].t;
+        if (!(elapsed > 0)) continue;
+        duration += elapsed;
+        count += syllables(parts[i].text, language);
+      }
       if (count < 4) continue;
-      rates.push((end - first) / count);
+      rates.push(duration / count);
     }
     if (rates.length < 3) return null;
     rates.sort((a, b) => a - b);
