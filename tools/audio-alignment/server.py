@@ -72,14 +72,36 @@ def validate_request(data):
     priority = data.get("positionMs", 0)
     if not isinstance(priority, (int, float)) or not 0 <= priority <= 86_400_000:
         priority = 0
-    return {"videoId": data["videoId"], "language": language, "cues": cleaned, "positionMs": priority}
+    # A local file may be a trimmed clip. The offset says which video time its
+    # first sample corresponds to; it is part of the job identity because the
+    # same file aligned at a different offset is a different result.
+    offset = data.get("offsetMs", 0)
+    if not isinstance(offset, (int, float)) or isinstance(offset, bool) or not 0 <= offset <= 86_400_000:
+        raise AlignmentError("invalidRequest")
+    return {"videoId": data["videoId"], "language": language, "cues": cleaned,
+            "positionMs": priority, "offsetMs": offset}
 
 
 def cache_key(data):
-    payload = {k: data[k] for k in ("videoId", "language", "cues")}
+    payload = {k: data[k] for k in ("videoId", "language", "cues", "offsetMs")}
     payload["model"] = MODELS[data["language"]]
     payload["version"] = VERSION
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def cue_window(cue, offset, samples):
+    """Sample range of one caption inside the audio file's own time base.
+
+    A declared offset shifts the file relative to the video, so the window is
+    taken in audio time; the returned base maps model frames back to video time.
+    Returns None when the file does not cover the caption at all.
+    """
+    base = max(cue["start"], offset)
+    first = max(0, int(round((base - offset) * 16)))
+    last = max(0, min(samples, int(round((cue["start"] + cue["dur"] - offset) * 16))))
+    if last <= first:
+        return None
+    return base, first, last
 
 
 def ctc_words(log_probs, labels, owners, blank_id):
@@ -163,7 +185,7 @@ class Aligner:
         self.loaded[language] = value
         return value
 
-    def align(self, cue, audio, language):
+    def align(self, cue, audio, language, offset=0):
         import numpy as np
         import torch
         extractor, tokenizer, model = self.load(language)
@@ -183,8 +205,10 @@ class Aligner:
             owners.extend([index] * len(letters))
         # Never borrow audio from a neighbouring caption. Small source timing
         # errors result in rejection rather than out-of-window word timestamps.
-        first = int(cue["start"] * 16)
-        last = min(len(audio), int((cue["start"] + cue["dur"]) * 16))
+        window = cue_window(cue, offset, len(audio))
+        if window is None:
+            return None
+        base, first, last = window
         waveform = audio[first:last]
         if len(waveform) < 800 or float(np.sqrt(np.mean(waveform ** 2))) < 0.0003:
             return None
@@ -198,8 +222,8 @@ class Aligner:
         frame_ms = len(waveform) / 16 / len(emissions)
         result = []
         for word, (start, end, score) in zip(cue["tokens"], words):
-            result.append({"u": word, "t": round(cue["start"] + start * frame_ms, 1),
-                           "e": min(cue["start"] + cue["dur"], round(cue["start"] + end * frame_ms, 1)),
+            result.append({"u": word, "t": round(base + start * frame_ms, 1),
+                           "e": min(cue["start"] + cue["dur"], round(base + end * frame_ms, 1)),
                            "score": round(score, 4)})
         return {"start": cue["start"], "dur": cue["dur"], "text": cue["text"], "words": result}
 
@@ -292,7 +316,7 @@ class Jobs:
             segments = job["segments"][after:after + 60]
             return {"id": job_id, "status": job["status"], "done": job["done"], "total": job["total"],
                     "aligned": len(job["segments"]), "error": job["error"], "segments": segments,
-                    "nextCursor": after + len(segments)}
+                    "audioMs": job.get("audioMs", 0), "nextCursor": after + len(segments)}
 
     def start(self, job_id, source=None):
         with self.lock:
@@ -308,11 +332,26 @@ class Jobs:
         if job["cancel"]:
             raise AlignmentError("cancelled")
 
+    def check_local_audio(self, data, audio_ms, offset):
+        """A local file must really cover the subtitles it is aligned against.
+
+        Duration, trim position and declared offset are checked together: a
+        mismatch is reported instead of silently producing shifted word times.
+        """
+        span_start = min(cue["start"] for cue in data["cues"])
+        span_end = max(cue["start"] + cue["dur"] for cue in data["cues"])
+        available = offset + audio_ms
+        if min(span_end, available) - max(span_start, offset) <= 0:
+            raise AlignmentError("audioMismatch")
+        if span_end > available + 250:
+            raise AlignmentError("audioTooShort")
+
     def run(self, job, source):
         try:
             with self.worker_lock:
                 self.cancelled(job)
                 folder, data = job["folder"], job["data"]
+                uploaded = source is not None      # a user-supplied file, not the download
                 wav_path = folder / "audio.wav"
                 if source is None and wav_path.is_file():
                     source = wav_path
@@ -329,6 +368,11 @@ class Jobs:
                 else:
                     audio = decode_audio(source, wav_path)
                 self.cancelled(job)
+                offset = data["offsetMs"]
+                audio_ms = len(audio) / 16
+                job["audioMs"] = int(audio_ms)
+                if uploaded:
+                    self.check_local_audio(data, audio_ms, offset)
                 job["status"] = "loadingModel"
                 self.aligner.load(data["language"])
                 self.cancelled(job)
@@ -339,7 +383,7 @@ class Jobs:
                                  else 1 if c["start"] >= position else 2, c["start"]))
                 for cue in ordered:
                     self.cancelled(job)
-                    aligned = self.aligner.align(cue, audio, data["language"])
+                    aligned = self.aligner.align(cue, audio, data["language"], offset)
                     with self.lock:
                         if aligned:
                             job["segments"].append(aligned)
@@ -434,6 +478,7 @@ class Handler(BaseHTTPRequestHandler):
                 # The cache location is reported so "alignment works but nothing is
                 # cached" can be diagnosed instead of silently re-downloading models.
                 self.reply({"ok": True, "version": VERSION, "languages": list(MODELS),
+                            "models": {key: value[0] for key, value in MODELS.items()},
                             "cacheDir": str(getattr(self.server.jobs, "root", "")),
                             "writable": getattr(self.server, "writable", None)})
             elif re.fullmatch(r"/jobs/[a-f0-9]{32}", url.path):

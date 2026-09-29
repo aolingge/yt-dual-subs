@@ -140,7 +140,7 @@ test('the status snapshot describes what the page is doing', async () => {
     ok: true, version: MANIFEST_VERSION, videoId: 'sample', enabled: true,
     backend: 'tlang', targetLang: 'zh-CN', sourceLang: 'de',
     mode: 'cues', source: 'youtube', transSource: 'youtube', cueCount: 1,
-    wordTiming: 'estimated', pending: false, cached: false, cooldownSec: 0
+    wordTiming: 'estimated', audioStale: false, pending: false, cached: false, cooldownSec: 0
   });
 
   const off = await mountContent({ cues, aligned: true, settings: { enabled: false } });

@@ -71,6 +71,28 @@
         i + 1 < parts.length ? parts[i + 1].index : text.length) }));
   }
 
+  // Stable identity of one caption track's text and boundaries. Alignment
+  // results are only valid for the subtitles they were produced from, so a
+  // cache entry has to be invalidated when the track or its text changes.
+  function timingKey(cues) {
+    const list = Array.isArray(cues) ? cues : [];
+    let hash = 2166136261;
+    const feed = (value) => {
+      const text = String(value);
+      for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+    };
+    feed(list.length);
+    for (const cue of list) {
+      const end = Number.isFinite(cue?.end) ? cue.end
+        : (Number.isFinite(cue?.dur) ? cue?.start + cue.dur : cue?.start);
+      feed("\u0000" + cue?.start + "|" + end + "|" + (cue?.text || ""));
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }
+
   // Offsets must actually describe each lexical word. A segment containing a
   // whole phrase with one timestamp is not a set of individual word times.
   function captionPieces(cue, language) {
@@ -513,7 +535,7 @@
     return count;
   }
 
-  const api = Object.freeze({ tokens, syllables, captionPieces, estimate, speakingRate, pace, localRate, align, applyAudio });
+  const api = Object.freeze({ tokens, timingKey, syllables, captionPieces, estimate, speakingRate, pace, localRate, align, applyAudio });
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.YtdsWordTiming = api;
 })(typeof window === "object" ? window : globalThis);

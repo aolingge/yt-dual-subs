@@ -77,7 +77,46 @@ test('audio context includes only missing timing and delayed results cannot appl
   assert.equal(player.request({ type: 'applyAudioTiming', record: { videoId, sourceLang: 'de', segments: [segment()] } }).ok, false);
 });
 
-test('local cache serializes partial results and merges jobs without any sync-storage writes', async () => {
+test('a caption track identity changes with text, boundaries and order', () => {
+  const track = [{ start: 0, end: 4000, text: 'Hallo Welt' }, { start: 5000, end: 9000, text: 'Guten Tag' }];
+  const key = timing.timingKey(track);
+  assert.match(key, /^[0-9a-f]{8}$/);
+  assert.equal(timing.timingKey(track.map(c => ({ ...c }))), key, 'the same track keeps its key');
+  assert.equal(timing.timingKey([{ start: 0, dur: 4000, text: 'Hallo Welt' },
+    { start: 5000, dur: 4000, text: 'Guten Tag' }]), key, 'dur and end describe the same cue');
+  assert.notEqual(timing.timingKey([{ ...track[0], text: 'Hallo Welt!' }, track[1]]), key);
+  assert.notEqual(timing.timingKey([{ ...track[0], start: 100, end: 4100 }, track[1]]), key);
+  assert.notEqual(timing.timingKey([track[1], track[0]]), key);
+  assert.equal(timing.timingKey([]), timing.timingKey([]));
+});
+
+test('alignment results for other subtitles are refused and reported, never applied', async () => {
+  const player = await mountContent({ videoId, cues: [{ ...cue }] });
+  const identity = player.request({ type: 'audioIdentity' });
+  assert.equal(identity.ok, true);
+  assert.equal(identity.videoId, videoId);
+  assert.match(identity.cuesKey, /^[0-9a-f]{8}$/);
+  assert.equal(player.request({ type: 'audioContext' }).cuesKey, identity.cuesKey);
+  const foreign = player.request({ type: 'applyAudioTiming',
+    record: { videoId, sourceLang: 'de', cuesKey: 'ffffffff', segments: [segment()] } });
+  assert.equal(foreign.count, 0, 'a record from another track is not applied');
+  assert.equal(player.status().audioStale, true, 'the UI can tell why nothing was applied');
+  assert.equal(player.status().wordTiming, 'estimated');
+  const current = player.request({ type: 'applyAudioTiming',
+    record: { videoId, sourceLang: 'de', cuesKey: identity.cuesKey, segments: [segment()] } });
+  assert.equal(current.count, 1);
+  assert.equal(player.status().wordTiming, 'audio');
+  assert.equal(player.status().audioStale, false, 'a matching record clears the notice');
+  // Switching the track changes the identity the alignment page polls.
+  player.navigate('otherde0001');
+  player.sendCues({ cues: [{ start: 0, dur: 3000, text: 'Andere Worte hier', trans: '别的词' }],
+    sourceLang: 'de', videoId: 'otherde0001' });
+  const changed = player.request({ type: 'audioIdentity' });
+  assert.equal(changed.videoId, 'otherde0001');
+  assert.notEqual(changed.cuesKey, identity.cuesKey);
+});
+
+test('local cache serializes partial results and keys them by track and offset', async () => {
   let saved = {};
   const listeners = [];
   const sandbox = { YtdsWordTiming: timing, chrome: {
@@ -86,10 +125,26 @@ test('local cache serializes partial results and merges jobs without any sync-st
       sync: { set() { assert.fail('audio must not write sync storage'); } } }
   } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'audio-cache.js'), 'utf8'), sandbox);
-  const save = segments => new Promise(resolve => listeners[0]({ type: 'saveAudioTiming', record: { videoId, sourceLang: 'de', segments } }, {}, resolve));
+  const save = (segments, extra = {}) => new Promise(resolve => listeners[0]({ type: 'saveAudioTiming',
+    record: { videoId, sourceLang: 'de', cuesKey: 'deadbeef', model: 'oliverguhr/wav2vec2-base-german-cv9',
+      version: 1, offsetMs: 0, segments, ...extra } }, {}, resolve));
   const second = { ...segment(), start: 5000, words: segment().words.map(w => ({ ...w, t: w.t + 5000, e: w.e + 5000 })) };
   await Promise.all([save([segment()]), save([second])]);
   assert.equal(saved.audioTimingCacheV1[0].segments.length, 2);
   const result = await save([{ ...second, words: [] }]);
-  assert.equal(result.count, 2, 'invalid partial results cannot erase earlier times');
+  assert.equal(result.ok, false, 'an all-invalid batch is refused, never stored as success');
+  assert.equal(saved.audioTimingCacheV1[0].segments.length, 2, 'and it cannot erase earlier times');
+  // A different subtitle track or audio offset is a different result, never a merge.
+  await save([segment()], { cuesKey: 'cafebabe' });
+  await save([segment()], { offsetMs: 60_000 });
+  assert.equal(saved.audioTimingCacheV1.length, 3);
+  // The arrays come from the vm realm, so compare joined text, not prototypes.
+  assert.equal(saved.audioTimingCacheV1.map(r => r.cuesKey).join(','), 'deadbeef,cafebabe,deadbeef');
+  assert.equal(saved.audioTimingCacheV1.map(r => r.offsetMs).join(','), '0,0,60000');
+  assert.equal(saved.audioTimingCacheV1.every(r => r.version === 1 && r.model), true);
+  // An incomplete record is refused instead of being stored as a success.
+  for (const extra of [{ cuesKey: '' }, { version: 0 }, { model: '' }, { offsetMs: -1 }]) {
+    assert.equal((await save([segment()], extra)).ok, false);
+  }
+  assert.equal(saved.audioTimingCacheV1.length, 3);
 });

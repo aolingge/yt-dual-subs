@@ -4,7 +4,7 @@
 const AUDIO_BASE = "http://127.0.0.1:8765";
 const AUDIO_ORIGINS = ["http://127.0.0.1/*"];
 const audioEl = id => document.getElementById(id);
-const t = (key, fallback = "") => chrome.i18n.getMessage(key) || fallback || key;
+const t = (key, fallback = "", subs = []) => chrome.i18n.getMessage(key, subs) || fallback || key;
 const tabId = Number(new URLSearchParams(location.search).get("tab"));
 let context = null;
 let jobId = "";
@@ -15,6 +15,13 @@ let lastSaved = 0;
 let permissionReady = false;
 let starting = false;
 let recordContext = null;
+let lastIdentityCheck = 0;
+
+// Milliseconds typed by the user for a trimmed local file, else 0.
+function offsetMs() {
+  const value = Number(audioEl("offset").value);
+  return Number.isFinite(value) && value > 0 ? Math.round(value * 1000) : 0;
+}
 
 function tabMessage(message) {
   return new Promise(resolve => {
@@ -49,8 +56,10 @@ function showError(error) {
   const keys = { helperOffline: "audioOffline", youtubeUnavailable: "audioYoutubeFailed",
     unsupportedLanguage: "audioUnsupported", ffmpegMissing: "audioFfmpegMissing",
     audioInvalid: "audioInvalid", audioTooLong: "audioTooLong", busy: "audioBusy",
+    audioTooShort: "audioTooShort", audioMismatch: "audioMismatch",
     invalidRequest: "audioInvalidRequest", notFound: "audioJobLost", permission: "audioPermissionDenied" };
   status(keys[error.message] || "audioFailed", true);
+  if (error.detail) audioEl("delivery").textContent = error.detail;
   if (error.message === "helperOffline" || error.message === "ffmpegMissing") audioEl("setup").open = true;
 }
 
@@ -58,6 +67,7 @@ function controls(running) {
   audioEl("start").disabled = running || !context?.cues?.length;
   audioEl("local").disabled = running || !context?.cues?.length;
   audioEl("language").disabled = running;
+  audioEl("offset").disabled = running;
   audioEl("cancel").hidden = !running;
 }
 
@@ -66,6 +76,7 @@ async function refreshContext() {
   if (!context?.ok) { context = null; status("audioNoCues", true); controls(false); return false; }
   audioEl("videoTitle").textContent = context.title || context.videoId;
   audioEl("cueInfo").textContent = context.cues.length + " " + t("audioNeedTiming");
+  if (context.audioStale) audioEl("delivery").textContent = t("audioStaleCache");
   const language = String(context.sourceLang).split("-")[0];
   if (["de", "en"].includes(language)) audioEl("language").value = language;
   else if (language !== "auto") { status("audioUnsupported", true); context = null; controls(false); return false; }
@@ -82,9 +93,65 @@ async function saveResults() {
   lastSaved = Date.now();
 }
 
+// Length of the subtitles that were sent for alignment, for the "your file is
+// shorter than the subtitles" hint.
+function captionEndMs() {
+  const ends = (context?.cues || []).map(c => (Number(c.start) || 0) + (Number(c.dur) || 0));
+  return ends.length ? Math.max(...ends) : 0;
+}
+
+function captionEndSeconds() {
+  return Math.round(captionEndMs() / 1000);
+}
+
+// Ask the browser for a local file's duration before uploading it. The helper
+// checks the decoded audio again; this only makes a mistyped offset or a clip
+// that stops early visible immediately instead of after a long model run.
+function fileDurationMs(file) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const probe = document.createElement("audio");
+    let settled = false;
+    const done = value => {
+      if (settled) return;
+      settled = true;
+      URL.revokeObjectURL(url);
+      probe.removeAttribute("src");
+      resolve(value);
+    };
+    probe.preload = "metadata";
+    probe.onloadedmetadata = () => done(Number.isFinite(probe.duration) ? Math.round(probe.duration * 1000) : 0);
+    probe.onerror = () => done(0);
+    probe.src = url;
+    setTimeout(() => done(0), 5000);
+  });
+}
+
+// The job belongs to the video and subtitle track it started from. Polling the
+// tab's identity lets a switched video or track stop the work instead of
+// burning CPU on results that may no longer be applied.
+async function staleJob() {
+  if (Date.now() - lastIdentityCheck < 1000) return "";
+  lastIdentityCheck = Date.now();
+  const identity = await tabMessage({ type: "audioIdentity" });
+  if (!identity?.ok) return "audioVideoChanged";
+  if (identity.videoId !== recordContext.videoId) return "audioVideoChanged";
+  if (identity.cuesKey !== recordContext.cuesKey) return "audioSubtitlesChanged";
+  return "";
+}
+
+async function stopStale(reason) {
+  try { await api("/jobs/" + jobId + "/cancel", { method: "POST" }); } catch (_e) { /* job may be gone */ }
+  jobId = "";
+  status(reason, true);
+  controls(false);
+}
+
 async function poll() {
   if (!jobId) return;
   try {
+    const reason = await staleJob();
+    if (reason) { await stopStale(reason); return; }
     const snapshot = await api("/jobs/" + jobId + "?after=" + cursor);
     if (snapshot.segments?.length) {
       segments.push(...snapshot.segments);
@@ -102,7 +169,11 @@ async function poll() {
     status(states[snapshot.status] || "audioStarting", false, counts);
     if (snapshot.status === "error") {
       await saveResults();
-      showError(new Error(snapshot.error));
+      const error = new Error(snapshot.error);
+      if (snapshot.error === "audioTooShort" && snapshot.audioMs) {
+        error.detail = t("audioLengthDetail", "", [Math.round(snapshot.audioMs / 1000), captionEndSeconds()]);
+      }
+      showError(error);
       controls(false);
       return;
     }
@@ -129,14 +200,28 @@ async function start(file) {
     }
     if (!await refreshContext() || !context.cues.length) return;
     controls(true);
-    await api("/health");
+    const health = await api("/health");
+    const language = audioEl("language").value;
+    const offset = file ? offsetMs() : 0;
+    if (file) {
+      const duration = await fileDurationMs(file);
+      if (duration && offset + duration + 250 < captionEndMs()) {
+        const error = new Error("audioTooShort");
+        error.detail = t("audioLengthDetail", "", [Math.round((offset + duration) / 1000), captionEndSeconds()]);
+        throw error;
+      }
+    }
     await YtdsSettings.set({ karaoke: true });
-    const request = { videoId: context.videoId, language: audioEl("language").value,
+    const request = { videoId: context.videoId, language, offsetMs: offset,
       positionMs: context.positionMs, cues: context.cues.filter(c => c.tokens.length) };
-    recordContext = { videoId: context.videoId, sourceLang: context.sourceLang };
+    // The result is only valid for this video, these subtitles, this model,
+    // this helper version and this audio offset — all of them identify the job.
+    recordContext = { videoId: context.videoId, sourceLang: context.sourceLang,
+      cuesKey: context.cuesKey, model: health.models?.[language] || "",
+      version: Number(health.version) || 0, offsetMs: offset };
     const created = await api("/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
     jobId = created.id;
-    cursor = 0; segments = []; lastSaved = 0;
+    cursor = 0; segments = []; lastSaved = 0; lastIdentityCheck = Date.now();
     clearTimeout(pollTimer);
     if (file) await api("/jobs/" + jobId + "/audio", {
       method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file

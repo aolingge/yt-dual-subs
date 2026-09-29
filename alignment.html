@@ -27,7 +27,9 @@
         <button id="cancel" class="secondary" data-i18n="audioCancel" hidden>停止分析</button>
       </div>
       <input id="audioFile" type="file" accept="audio/*,video/*,.wav,.mp3,.m4a,.webm,.mp4,.ogg,.flac" hidden>
-      <p class="muted" data-i18n="audioLocalHint">本地文件必须与当前视频对应，并从视频的 0:00 开始。匿名音频获取失败时可用此方式；文件只交给本机程序。</p>
+      <p class="muted" data-i18n="audioLocalHint">本地文件必须与当前视频对应。若文件从视频中间开始，请在下面填写它对应的起始时间；时长不足时会直接提示，不会套用错误时间。</p>
+      <label for="offset" data-i18n="audioOffset">本地音频的起始时间（秒，从 0:00 开始的完整文件填 0）</label>
+      <input id="offset" type="number" min="0" step="0.1" value="0" inputmode="decimal">
       <progress id="progress" max="100" value="0" hidden></progress>
       <p id="status" role="status" aria-live="polite"></p>
       <p id="delivery" class="muted"></p>

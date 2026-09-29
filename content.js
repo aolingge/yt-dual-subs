@@ -241,6 +241,7 @@
   let wordEnds = null;          // audio-only word ends; silence has no active word
   let audioRecord = null;
   let audioCacheIdentity = "";
+  let audioStaleRecord = false;  // a saved alignment belonged to other subtitles
   let activeWordIdx = -1;       // highlighted word index
   let overlayResizeObserver = null;
   let overlayLayoutFrame = 0;
@@ -1977,9 +1978,23 @@
   }
 
   // ---- per-video cue cache (memory only) -----------------------------------
+  // Alignment results belong to one subtitle track. The key is memoized per
+  // list identity, so a long track is never re-hashed while polling.
+  let cuesKeyMemo = { list: null, key: "" };
+  function cuesKey() {
+    if (cuesKeyMemo.list !== displayCueList) {
+      cuesKeyMemo = { list: displayCueList,
+        key: window.YtdsWordTiming.timingKey(displayCueList) };
+    }
+    return cuesKeyMemo.key;
+  }
+
   function mergeAudioTiming(record) {
     if (!record || record.videoId !== currentVideoId || record.sourceLang !== cueSourceLang ||
         !Array.isArray(record.segments) || record.segments.length > 5000 || !displayCueList) return 0;
+    // A record produced for other subtitles would only match by coincidence.
+    if (record.cuesKey && record.cuesKey !== cuesKey()) { audioStaleRecord = true; return 0; }
+    audioStaleRecord = false;
     if (!audioRecord || audioRecord.videoId !== record.videoId || audioRecord.sourceLang !== record.sourceLang) {
       audioRecord = { videoId: record.videoId, sourceLang: record.sourceLang, segments: [] };
     }
@@ -2000,6 +2015,7 @@
   }
 
   function restoreAudioTiming() {
+    audioStaleRecord = false;      // re-decided for the track that is loading now
     if (audioRecord?.videoId === currentVideoId && audioRecord.sourceLang === cueSourceLang) {
       window.YtdsWordTiming.applyAudio(displayCueList, audioRecord.segments, cueSourceLang);
     }
@@ -2369,6 +2385,7 @@
       source: cueVideoId ? "youtube" : (lastSource ? "native" : "none"),
       transSource,                          // youtube | google | waiting | none
       wordTiming: !settings.enabled || !settings.karaoke ? "off" : wordTimingSource,
+      audioStale: !!audioStaleRecord,
       cueCount: displayCueList ? displayCueList.length : 0,
       pending: !!translationPending,
       cached: !!usedVideoCache,
@@ -2408,9 +2425,18 @@
       }
       sendResponse({ ok: true, videoId: currentVideoId, sourceLang: cueSourceLang,
         title: videoTitle(), positionMs: (getVideo()?.currentTime || 0) * 1000,
+        cuesKey: cuesKey(), audioStale: audioStaleRecord,
         cues: displayCueList.filter(c => !window.YtdsWordTiming.captionPieces(c, cueSourceLang))
           .map(c => ({ start: c.start, dur: c.end - c.start, text: c.text,
             tokens: window.YtdsWordTiming.tokens(c.text, cueSourceLang).map(w => w.text) })) });
+      return;
+    }
+    // Cheap identity check for the alignment page: hashing a long track is
+    // memoized, so polling this never rescans the subtitles.
+    if (msg.type === "audioIdentity") {
+      const ok = !!settings.enabled && !!displayCueList?.length && cueVideoId === currentVideoId;
+      sendResponse({ ok, videoId: currentVideoId, sourceLang: cueSourceLang,
+        cuesKey: ok ? cuesKey() : "", positionMs: (getVideo()?.currentTime || 0) * 1000 });
       return;
     }
     if (msg.type === "applyAudioTiming") {
