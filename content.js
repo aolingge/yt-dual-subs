@@ -1215,12 +1215,25 @@
   // speed. The measured intervals are collected once per caption track; each
   // sentence then prefers the pace measured near it and falls back to the
   // video-wide rate and finally to the language default.
-  let rateMemo = { list: null, lang: null, value: null };
+  let rateMemo = { list: null, lang: null, stamp: "", value: null };
+  // Word times can arrive long after the track did: audio alignment fills them
+  // into the sentences in place. Counting them makes that visible to the memo,
+  // so the pace is measured again instead of answering from the older estimate.
+  function paceStamp() {
+    let words = 0, sources = 0;
+    for (const cue of Array.isArray(displayCueList) ? displayCueList : []) {
+      if (Array.isArray(cue?.words)) words += cue.words.length;
+      if (cue && cue.wordTimingSource && cue.wordTimingSource !== "captions") sources++;
+    }
+    return words + ":" + sources;
+  }
+  function forgetPace() { rateMemo = { list: null, lang: null, stamp: "", value: null }; }
   function videoPace() {
     const timing = window.YtdsWordTiming;
-    if (rateMemo.list !== cueList || rateMemo.lang !== cueSourceLang) {
-      rateMemo = { list: cueList, lang: cueSourceLang,
-        value: timing.pace ? timing.pace(cueList, cueSourceLang) : null };
+    const stamp = paceStamp();
+    if (rateMemo.list !== displayCueList || rateMemo.lang !== cueSourceLang || rateMemo.stamp !== stamp) {
+      rateMemo = { list: displayCueList, lang: cueSourceLang, stamp,
+        value: timing.pace ? timing.pace(displayCueList, cueSourceLang) : null };
     }
     return rateMemo.value;
   }
@@ -2001,16 +2014,32 @@
         !Array.isArray(record.segments) || record.segments.length > 5000 || !displayCueList) return 0;
     // Approximate mode deliberately keeps the audio model out of the page.
     if (settings.timingMode === "approximate") return 0;
-    // A record produced for other subtitles would only match by coincidence.
-    if (record.cuesKey && record.cuesKey !== cuesKey()) { audioStaleRecord = true; return 0; }
+    // Results from an older helper version do not carry the track position and
+    // were cached without looking at the audio file, so they are not reused.
+    const wantedVersion = window.YtdsWordTiming.AUDIO_RECORD_VERSION || 0;
+    if (wantedVersion && !(Number.isInteger(record.version) && record.version >= wantedVersion)) {
+      audioStaleRecord = true;
+      return 0;
+    }
+    // A result is only valid for the exact caption track it was produced from:
+    // the key covers every cue's text and boundaries, in the original order. A
+    // record without that key cannot be shown to belong to this track, so it is
+    // refused rather than applied to whatever sentence happens to look similar.
+    if (!/^[0-9a-f]{8}$/.test(record.cuesKey || "") || record.cuesKey !== cuesKey()) {
+      audioStaleRecord = true;
+      return 0;
+    }
     audioStaleRecord = false;
-    if (!audioRecord || audioRecord.videoId !== record.videoId || audioRecord.sourceLang !== record.sourceLang) {
-      audioRecord = { videoId: record.videoId, sourceLang: record.sourceLang, segments: [] };
+    if (!audioRecord || audioRecord.videoId !== record.videoId ||
+        audioRecord.sourceLang !== record.sourceLang || audioRecord.cuesKey !== record.cuesKey) {
+      audioRecord = { videoId: record.videoId, sourceLang: record.sourceLang,
+        cuesKey: record.cuesKey, segments: [] };
     }
     const combined = new Map(audioRecord.segments.map(s => [s.start + "\0" + s.text, s]));
     for (const s of record.segments) if (s && typeof s.text === "string") combined.set(s.start + "\0" + s.text, s);
     audioRecord.segments = [...combined.values()].slice(-5000);
     const count = window.YtdsWordTiming.applyAudio(displayCueList, record.segments, cueSourceLang);
+    if (count) forgetPace();
     if (count && settings.karaoke) {
       const video = getVideo();
       const time = video ? video.currentTime * 1000 + (Number(settings.offsetMs) || 0) : 0;
@@ -2025,8 +2054,9 @@
 
   function restoreAudioTiming() {
     audioStaleRecord = false;      // re-decided for the track that is loading now
-    if (audioRecord?.videoId === currentVideoId && audioRecord.sourceLang === cueSourceLang) {
-      window.YtdsWordTiming.applyAudio(displayCueList, audioRecord.segments, cueSourceLang);
+    if (audioRecord?.videoId === currentVideoId && audioRecord.sourceLang === cueSourceLang &&
+        audioRecord.cuesKey === cuesKey()) {
+      if (window.YtdsWordTiming.applyAudio(displayCueList, audioRecord.segments, cueSourceLang)) forgetPace();
     }
     const identity = currentVideoId + "\0" + cueSourceLang;
     if (audioCacheIdentity === identity || !extAlive()) return;
@@ -2037,7 +2067,11 @@
         if (!extAlive() || chrome.runtime.lastError || currentVideoId !== id || cueSourceLang !== language) return;
         const records = saved && saved.audioTimingCacheV1;
         if (Array.isArray(records)) {
-          const record = records.find(r => r?.videoId === id && r.sourceLang === language);
+          // A record written by an older helper version is simply not a
+          // candidate here: it is not reported as a stale result either.
+          const wanted = window.YtdsWordTiming.AUDIO_RECORD_VERSION || 0;
+          const record = records.find(r => r?.videoId === id && r.sourceLang === language &&
+            (!wanted || (Number.isInteger(r.version) && r.version >= wanted)));
           if (record) mergeAudioTiming(record);
         }
       });
@@ -2436,9 +2470,14 @@
       sendResponse({ ok: true, videoId: currentVideoId, sourceLang: cueSourceLang,
         title: videoTitle(), positionMs: (getVideo()?.currentTime || 0) * 1000,
         cuesKey: cuesKey(), audioStale: audioStaleRecord,
-        cues: displayCueList.filter(c => !window.YtdsWordTiming.captionPieces(c, cueSourceLang))
-          .map(c => ({ start: c.start, dur: c.end - c.start, text: c.text,
-            tokens: window.YtdsWordTiming.tokens(c.text, cueSourceLang).map(w => w.text) })) });
+        // Each sentence carries its position in the track. The helper echoes it,
+        // and a result is only applied to the sentence that still sits there, so
+        // a re-ordered or re-segmented track cannot receive another cue's times.
+        cues: displayCueList.map((cue, index) => ({ cue, index }))
+          .filter(({ cue }) => !window.YtdsWordTiming.captionPieces(cue, cueSourceLang))
+          .map(({ cue, index }) => ({ index, start: cue.start, dur: cue.end - cue.start,
+            text: cue.text,
+            tokens: window.YtdsWordTiming.tokens(cue.text, cueSourceLang).map(w => w.text) })) });
       return;
     }
     // Cheap identity check for the alignment page: hashing a long track is
