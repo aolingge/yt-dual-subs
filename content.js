@@ -2874,6 +2874,8 @@
   // forward from the last report, and the bridge measures every caption from it.
   // Nothing here reads a clock of its own.
   const MEDIA_REPORT_MS = 250;
+  // The video the running reporter speaks for; empty when no session is live.
+  let reportedVideoId = "";
 
   function mediaReport(extra) {
     const video = getVideo();
@@ -2912,8 +2914,16 @@
 
   function startMediaReporter() {
     if (mediaReportTimer) return;
+    reportedVideoId = currentVideoId;
     sendMediaReport({ event: "start" });
-    mediaReportTimer = setInterval(() => { sendMediaReport({ event: "tick" }); }, MEDIA_REPORT_MS);
+    mediaReportTimer = setInterval(() => {
+      // One video's audio is being captured, so a report from a different video
+      // is a lie about the audio being recognized. The page may navigate to the
+      // next video while the capture keeps running — stop and take the captions
+      // down instead of stamping the new timeline onto the old audio.
+      if (reportedVideoId !== currentVideoId) { abandonRecognition(); return; }
+      sendMediaReport({ event: "tick" });
+    }, MEDIA_REPORT_MS);
   }
 
   function stopMediaReporter() {
@@ -2921,7 +2931,27 @@
       clearInterval(mediaReportTimer);
       mediaReportTimer = null;
     }
+    reportedVideoId = "";
     sendMediaReport({ event: "stop" });
+  }
+
+  // The video behind a live capture changed (or a new part started). The audio
+  // in flight belongs to the video that is gone, so the session is dropped and
+  // asked for again: recognition has to be started deliberately for the new one,
+  // and its availability is measured from scratch.
+  function abandonRecognition() {
+    const previousVideoId = reportedVideoId;
+    stopMediaReporter();
+    if (previousVideoId) {
+      try {
+        chrome.runtime.sendMessage(
+          { type: "recognitionAbandoned", videoId: currentVideoId, previousVideoId },
+          () => { void chrome.runtime.lastError; });
+      } catch (_e) { /* the background will stop it when the tab goes away */ }
+    }
+    recogState = "";
+    recogMessage = "";
+    handleClearRecognized();
   }
 
   // The page's own playback events, forwarded only while a session is live.

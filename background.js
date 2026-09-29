@@ -311,8 +311,23 @@ async function recogStop() {
   return { ok: true };
 }
 
-// A captured tab that goes away leaves nothing to recognize. Guarded because a
-// reduced chrome stand-in (tests) may carry no tabs API at all.
+// The page moved on to another video while a capture was running: the audio in
+// flight belongs to the video that is gone, so the new video does not inherit
+// its captions. The overlay is told to forget them before the session ends, so
+// the user never sees the previous video's sentences over the new one.
+async function recogAbandon(msg, sender) {
+  if (recog.tabId == null) return { ok: false, reason: "idle" };
+  if (sender && sender.tab && sender.tab.id != null && sender.tab.id !== recog.tabId) {
+    return { ok: false, reason: "other_tab" };
+  }
+  recog.cueCount = 0;
+  recog.revision = 0;
+  deliverToTab(recog.tabId, { type: "clearRecognized" });
+  return recogStop();
+}
+
+// A captured video that goes away leaves nothing to recognize. Guarded because
+// a reduced chrome stand-in (tests) may carry no tabs API at all.
 if (chrome.tabs && chrome.tabs.onRemoved && chrome.tabs.onRemoved.addListener) {
   chrome.tabs.onRemoved.addListener((tabId) => {
     if (recog.tabId === tabId) recogStop();
@@ -356,6 +371,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // tab.
   if (msg.type === "mediaReport") {
     relayMediaReport(msg, sender).then(sendResponse).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+  if (msg.type === "recognitionAbandoned") {
+    recogAbandon(msg, sender).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true;
   }
   if (msg.type === "recogState") {

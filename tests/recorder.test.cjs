@@ -246,6 +246,41 @@ test('stopping asks the recorder to finish, then clears and closes', async () =>
   assert.equal(status.recorder.tabId, null);
 });
 
+test('a video change drops the session and takes its captions down first', async () => {
+  const harness = load({ answer: pageAnswer(CONTEXT) });
+  await harness.ask({ type: 'recogStart', tabId: 42 });
+  await harness.ask({ type: 'recogState', state: 'running', cueCount: 4 });
+  harness.sent.length = 0;
+  // The page says: the video I was reporting for is gone.
+  const answer = await harness.ask(
+    { type: 'recognitionAbandoned', videoId: 'BV2#p1', previousVideoId: 'BV1#p1' },
+    { tab: { id: 42 } });
+  assert.equal(answer.ok, true);
+  const cleared = harness.outgoing('clearRecognized', 42);
+  assert.equal(cleared.length, 1, 'the overlay is told to forget the old video before anything else');
+  assert.ok(harness.sent.some((m) => m.type === 'recogOffscreenStop'), 'the recorder is finished');
+  assert.equal(harness.state.closed, 1);
+  const status = await harness.ask({ type: 'recogStatus' });
+  assert.equal(status.recorder.state, '');
+  assert.equal(status.recorder.tabId, null);
+  assert.equal(status.recorder.cueCount, 0);
+});
+
+test('an abandoned notice from a tab that was never captured is ignored', async () => {
+  const harness = load({ answer: pageAnswer(CONTEXT) });
+  await harness.ask({ type: 'recogStart', tabId: 42 });
+  await harness.ask({ type: 'recogState', state: 'running' });
+  harness.sent.length = 0;
+  const answer = await harness.ask(
+    { type: 'recognitionAbandoned', videoId: 'BV2#p1' },
+    { tab: { id: 99 } });
+  assert.equal(answer.ok, false);
+  assert.equal(answer.reason, 'other_tab');
+  assert.equal(harness.outgoing('clearRecognized', 42).length, 0);
+  const status = await harness.ask({ type: 'recogStatus' });
+  assert.equal(status.recorder.state, 'running', 'the stranger did not stop the real capture');
+});
+
 test('the recorder state is kept for the popup to read back', async () => {
   const harness = load({ answer: pageAnswer(CONTEXT) });
   await harness.ask({ type: 'recogStart', tabId: 42 });

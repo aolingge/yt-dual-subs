@@ -140,7 +140,7 @@ async function run(question) {
   session.observe({
     mediaMs: Number.isFinite(question.mediaMs) ? question.mediaMs : 900000,
     wallMs: Date.now(),
-    rate: 1,
+    rate: question.rate || 1,
     paused: false,
     epoch: question.epoch || 1,
   });
@@ -159,8 +159,40 @@ async function run(question) {
     }
     await session.tick();
   }
+  if (question.segments) {
+    await feedSegments(session, audio, question.segments);
+  }
   const finished = await session.finish();
   return { started, updates, states, cues: session.cues, finished };
+}
+
+// The page's own reports, in order, between slices of one continuous audio
+// stream: a seek is exactly this — the audio keeps arriving while the video
+// jumps somewhere else — so the segments are fed with the clock reports a real
+// page would send at each moment.
+async function feedSegments(session, audio, segments) {
+  const chunk = Math.round(audio.rate / 10) * 2; // 100 ms of source audio
+  let offset = 0;
+  for (const segment of segments) {
+    const mediaMs = Math.max(0, Math.round((segment.atMs || 0) + (offset / audio.rate) * 1000));
+    session.observe({
+      mediaMs,
+      wallMs: Date.now() + offset / 2,
+      rate: Number(segment.rate) || 1,
+      paused: !!segment.paused,
+      epoch: segment.epoch === undefined ? 1 : segment.epoch,
+    });
+    const count = Number.isFinite(segment.chunks) ? segment.chunks : 8;
+    for (let index = 0; index < count; index += 1) {
+      const slice = audio.samples.subarray(offset, Math.min(offset + chunk, audio.samples.length));
+      await session.pushPcm(new Uint8Array(slice), { atMs: Date.now() });
+      offset += slice.length;
+      if (index % 4 === 3) await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await session.tick();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+  return offset;
 }
 
 // 1. a video with captions is refused, and no audio is sent for it.
@@ -244,6 +276,53 @@ if (german.cues.length) {
   check(german.cues[0].start >= 59000 && german.cues[0].start < 60000 + 4000,
     "the German caption is timed against the video's timeline too", german.cues[0].start);
 }
+
+// 5. A seek. The page jumps 15 minutes ahead while the capture keeps running,
+//    and the bridge must measure the new audio against the new position: the
+//    captions of the old stream describe a place the video has left, so they are
+//    dropped rather than left in the list to reappear on a rewind.
+const seekStart = 120000;
+const seekTarget = 900000;
+const seeked = await run({
+  platform: "bilibili", videoKey: "BV1xx#p4", captionAvailability: "absent",
+  sourceLanguage: "zh", title: "seek", durationMs: 1800000, mediaMs: seekStart,
+  segments: [
+    { atMs: seekStart, chunks: 18, epoch: 1 },
+    { atMs: seekTarget, chunks: 36, epoch: 2 },
+  ],
+});
+const afterSeek = seeked.cues.filter((cue) => cue.epoch === 2);
+const beforeSeek = seeked.cues.filter((cue) => cue.epoch !== 2);
+check(afterSeek.length > 0, "audio captured after the seek is still recognized",
+  { cues: seeked.cues.length, states: seeked.states.map((s) => s.state) });
+check(beforeSeek.length === 0,
+  "the captions of the timeline the video left are dropped, not kept",
+  beforeSeek.map((cue) => [cue.start, cue.text]));
+check(afterSeek.every((cue) => cue.start >= seekTarget - 1000),
+  "a caption after the seek is timed from where the video now is",
+  afterSeek.map((cue) => cue.start));
+check(seeked.cues.filter((cue) => cue.start >= seekStart - 1000 && cue.start < seekTarget - 1000).length === 0,
+  "nothing captured before the jump is shown as if it happened at the new position");
+
+// 6. A playback-rate change is a timeline change like a seek: the video's clock
+//    now advances at a different rate, so the bridge is told with the next
+//    packet instead of quietly stretching the old mapping.
+const faster = await run({
+  platform: "bilibili", videoKey: "BV1xx#p5", captionAvailability: "absent",
+  sourceLanguage: "zh", title: "rate", durationMs: 1800000, mediaMs: 300000,
+  segments: [
+    { atMs: 300000, chunks: 16, epoch: 1, rate: 1 },
+    { atMs: 306000, chunks: 32, epoch: 2, rate: 2 },
+  ],
+});
+const atRate = faster.cues.filter((cue) => cue.epoch === 2);
+check(atRate.length > 0, "audio captured at 2x is still recognized",
+  { cues: faster.cues.length, states: faster.states.map((s) => s.state) });
+check(faster.cues.every((cue) => cue.epoch === 1 || cue.start >= 305000),
+  "captions from the 2x stretch are timed against the faster clock",
+  faster.cues.map((cue) => [cue.epoch, cue.start]));
+check(!faster.states.map((entry) => entry.state).includes("degraded"),
+  "a rate change does not cost audio", faster.states.map((entry) => entry.state));
 
 server.kill();
 console.log("\n" + (failures.length ? "FAILED: " + failures.length + " check(s)" : "all checks passed"));

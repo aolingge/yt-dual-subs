@@ -69,6 +69,13 @@ the popup does not end the recording.
   captions.
 - The Chinese word times the model reports are sentence/word times for the
   Chinese original; they are **not** used to highlight German word by word.
+- A pause, a seek or a playback-rate change is followed live: the page reports
+  where the video now is, and captions are measured from the new position. The
+  sentences of the timeline the video left are dropped, so a rewind cannot bring
+  them back over the wrong audio.
+- Leaving the video or switching part **ends the session**. The next video starts
+  from nothing and recognition has to be started again for it, because its own
+  caption state decides whether recognition is the right answer.
 - Nothing is stored on disk by default. Stopping the capture, leaving the video
   or closing the tab ends the session and drops the text.
 

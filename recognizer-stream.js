@@ -230,9 +230,15 @@
       if (!response) return { added: 0, updated: 0 };
       this.revision = Math.max(this.revision, Number(response.revision) || 0);
       if (response.status) this.status = response.status;
-      const merged = globalThis.YtdsBridge.mergeSegments(this.cues, response.segments);
+      // After a seek or a rate change the bridge rebases the timeline, and every
+      // caption measured on the old one describes a position the video has left.
+      // Rewinding would bring those sentences back over the wrong audio, so they
+      // are dropped the moment the new epoch starts rather than left in the list.
+      const before = (this.cues || []).length;
+      const fresh = (this.cues || []).filter((cue) => cue.epoch === this.epoch);
+      const merged = globalThis.YtdsBridge.mergeSegments(fresh, response.segments);
       this.cues = merged.cues;
-      if (merged.added || merged.updated) {
+      if (merged.added || merged.updated || fresh.length !== before) {
         this.onUpdate({
           cues: this.cues.slice(),
           added: merged.added,
