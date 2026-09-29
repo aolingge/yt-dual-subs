@@ -269,6 +269,13 @@
 
       <div class="pos-foot">
         <span class="pos-hint" data-i18n="karaokeHint">优先使用原字幕词时间；缺少时自动尝试匹配同语言自动字幕，整句始终完整显示。</span>
+        <label for="timingMode" data-i18n="timingModeLabel">词时间来源</label>
+        <select id="timingMode">
+          <option value="auto" data-i18n="timingModeAuto">自动：优先使用可靠词时间，其余近似估算</option>
+          <option value="approximate" data-i18n="timingModeApproximate">近似跟读：不联网匹配自动字幕，也不使用音频模型</option>
+          <option value="audio" data-i18n="timingModeAudio">音频对齐：使用本机模型分析音频</option>
+        </select>
+        <span class="pos-hint" data-i18n="timingModeHint">模式在下次加载视频或字幕时完全生效；音频对齐还需要本机辅助程序。</span>
         <label class="chk karaoke-approximate">
           <input type="checkbox" id="karaokeApproximate" />
           <span data-i18n="karaokeApproximateLabel">无词时间时启用近似跟读</span>

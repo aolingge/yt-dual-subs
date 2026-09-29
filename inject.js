@@ -386,7 +386,7 @@
       let translationComplete = !translationPromise;
       // Optional word timing must not hold up the original or its translation.
       // A later update upgrades the same text without switching the user's CC.
-      if (cfg.useWordTiming && window.YtdsWordTiming) {
+      if (cfg.useWordTiming && cfg.useAutoMatch !== false && window.YtdsWordTiming) {
         const donorUrl = automaticTimingUrl(sourceLang, baseUrl);
         if (donorUrl && cues.some((c) => !window.YtdsWordTiming.captionPieces(c, sourceLang))) {
           timingTrack(donorUrl).then((donor) => {
@@ -699,7 +699,7 @@
         checkVideoChange();
         currentVideoId = videoIdFromLocation();
         cfg = { targetLang: d.targetLang, useTlang: !!d.useTlang,
-          useWordTiming: !!d.useWordTiming };
+          useWordTiming: !!d.useWordTiming, useAutoMatch: d.useAutoMatch !== false };
         // Adopt the content-supplied nonce so our posts correlate to THIS
         // sendConfig(); content.js drops any reply with an older nonce.
         if (typeof d.nonce === "number") reqNonce = d.nonce;
@@ -720,7 +720,10 @@
         }
       } else if (d.type === "word-timing-config") {
         // Turning highlighting off needs no refetch of the original/translation.
-        if (cfg) cfg.useWordTiming = !!d.useWordTiming;
+        if (cfg) {
+          cfg.useWordTiming = !!d.useWordTiming;
+          cfg.useAutoMatch = d.useAutoMatch !== false;
+        }
       } else if (d.type === "export-request") {
         // On-demand SRT export: build a COMPLETE bilingual cue set regardless of
         // the live backend mode (see produceExport). Correlated by exportId.

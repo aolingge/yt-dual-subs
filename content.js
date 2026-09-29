@@ -83,6 +83,10 @@
     studyRate: 0.75,             // playback rate used while repeating a sentence
     karaoke: true,               // prefer caption word times; optional labeled estimate
     karaokeApproximate: true,
+    // where word times may come from: "auto" (captions, matching automatic
+    // captions, then estimation) | "approximate" (no extra fetch, no audio
+    // model) | "audio" (verified local audio alignment as well)
+    timingMode: "auto",
     karaokeBg: "#ffd65c",
     karaokeTextColor: "#161616",
     karaokeOpacity: 0.95,
@@ -242,6 +246,7 @@
   let audioRecord = null;
   let audioCacheIdentity = "";
   let audioStaleRecord = false;  // a saved alignment belonged to other subtitles
+  let audioJobState = "";        // "" | "running" | "done" | "failed"
   let activeWordIdx = -1;       // highlighted word index
   let overlayResizeObserver = null;
   let overlayLayoutFrame = 0;
@@ -358,13 +363,15 @@
       applyRevealState();
     }
     if ("wordLookup" in changes || "targetLang" in changes) hideWordLookup();
-    if ("karaoke" in changes && !settings.karaoke) {
+    if ("karaoke" in changes || "timingMode" in changes) {
       try {
         window.postMessage({ source: "ytds-content", type: "word-timing-config",
-          useWordTiming: false }, "*");
+          useWordTiming: !!settings.karaoke,
+          useAutoMatch: settings.timingMode !== "approximate" }, "*");
       } catch (_e) { /* ignore */ }
     }
-    if ("karaoke" in changes || "karaokeApproximate" in changes || "revealMode" in changes) {
+    if ("karaoke" in changes || "karaokeApproximate" in changes || "timingMode" in changes ||
+        "revealMode" in changes) {
       activeCueIdx = -1;              // re-render the current sentence
       cueDirty = true;
       cueTick();
@@ -1992,6 +1999,8 @@
   function mergeAudioTiming(record) {
     if (!record || record.videoId !== currentVideoId || record.sourceLang !== cueSourceLang ||
         !Array.isArray(record.segments) || record.segments.length > 5000 || !displayCueList) return 0;
+    // Approximate mode deliberately keeps the audio model out of the page.
+    if (settings.timingMode === "approximate") return 0;
     // A record produced for other subtitles would only match by coincidence.
     if (record.cuesKey && record.cuesKey !== cuesKey()) { audioStaleRecord = true; return 0; }
     audioStaleRecord = false;
@@ -2386,6 +2395,7 @@
       transSource,                          // youtube | google | waiting | none
       wordTiming: !settings.enabled || !settings.karaoke ? "off" : wordTimingSource,
       audioStale: !!audioStaleRecord,
+      audioJob: audioJobState,              // running | done | failed | ""
       cueCount: displayCueList ? displayCueList.length : 0,
       pending: !!translationPending,
       cached: !!usedVideoCache,
@@ -2446,6 +2456,18 @@
         const count = mergeAudioTiming(msg.record);
         sendResponse({ ok: true, count });
       }
+      return;
+    }
+    // The alignment page reports its own progress so the popup can tell
+    // "still analysing" apart from "no audio times exist".
+    if (msg.type === "audioJobState") {
+      const state = msg.state === "running" || msg.state === "done" || msg.state === "failed"
+        ? msg.state : "";
+      if (audioJobState !== state) {
+        audioJobState = state;
+        // The popup polls this snapshot every 1.5 s; no push needed.
+      }
+      sendResponse({ ok: true, audioJob: audioJobState });
       return;
     }
     if (msg.type === "studyCues") {
@@ -2803,6 +2825,8 @@
         targetLang: settings.targetLang,
         useTlang: settings.backend !== "gtx",
         useWordTiming: !!settings.karaoke,
+        // Approximate mode must not fetch another caption track at all.
+        useAutoMatch: settings.timingMode !== "approximate",
         nonce
       }, "*");
     } catch (_e) { /* ignore */ }

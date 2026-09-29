@@ -38,6 +38,12 @@ function status(key, error = false, suffix = "") {
   audioEl("status").classList.toggle("error", error);
 }
 
+// The popup reads its status from the video tab, so the page that owns the job
+// reports progress and failure there instead of only in its own window.
+function setJobState(state) {
+  if (recordContext) tabMessage({ type: "audioJobState", state });
+}
+
 async function api(path, options = {}) {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), options.body instanceof File ? 120000 : 5000);
@@ -169,6 +175,7 @@ async function poll() {
     status(states[snapshot.status] || "audioStarting", false, counts);
     if (snapshot.status === "error") {
       await saveResults();
+      setJobState("failed");
       const error = new Error(snapshot.error);
       if (snapshot.error === "audioTooShort" && snapshot.audioMs) {
         error.detail = t("audioLengthDetail", "", [Math.round(snapshot.audioMs / 1000), captionEndSeconds()]);
@@ -179,12 +186,13 @@ async function poll() {
     }
     if (["done", "cancelled"].includes(snapshot.status) && cursor >= snapshot.aligned) {
       await saveResults();
+      setJobState("done");
       if (!snapshot.aligned && snapshot.status === "done") status("audioNoMatches", true);
       controls(false);
       return;
     }
     pollTimer = setTimeout(poll, cursor < snapshot.aligned ? 20 : 1500);
-  } catch (error) { showError(error); controls(false); }
+  } catch (error) { setJobState("failed"); showError(error); controls(false); }
 }
 
 async function start(file) {
@@ -222,6 +230,7 @@ async function start(file) {
     const created = await api("/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
     jobId = created.id;
     cursor = 0; segments = []; lastSaved = 0; lastIdentityCheck = Date.now();
+    setJobState("running");
     clearTimeout(pollTimer);
     if (file) await api("/jobs/" + jobId + "/audio", {
       method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file
@@ -246,6 +255,10 @@ audioEl("audioFile").addEventListener("change", event => {
 audioEl("cancel").addEventListener("click", async () => {
   try { if (jobId) await api("/jobs/" + jobId + "/cancel", { method: "POST" }); }
   catch (error) { showError(error); }
+  setJobState("done");
 });
+// Closing the page ends the analysis, so the video tab must stop claiming that
+// alignment is still running.
+window.addEventListener("beforeunload", () => { if (jobId) setJobState("failed"); });
 chrome.permissions.contains({ origins: AUDIO_ORIGINS }).then(value => { permissionReady = value; });
 refreshContext().catch(() => { status("audioNoCues", true); controls(false); });

@@ -17,6 +17,10 @@ const DEFAULTS = {
   studyRate: 0.75,             // playback rate used while repeating a sentence
   karaoke: true,               // prefer caption word times; optional labeled estimate
   karaokeApproximate: true,
+  // where word times may come from: "auto" (captions, matching automatic captions,
+  // then estimation) | "approximate" (no extra fetch, no audio model) | "audio"
+  // (verified local audio alignment as well)
+  timingMode: "auto",
   karaokeBg: "#ffd65c",
   karaokeTextColor: "#161616",
   karaokeOpacity: 0.95,
@@ -331,7 +335,18 @@ async function refreshStatus() {
     waiting: t("karaokeStatusWaiting", "跟读：等待带有时间的原文字幕"),
     off: t("karaokeStatusOff", "逐词跟读已关闭")
   };
-  const timingText = resp ? labels[resp.wordTiming] || labels.waiting : "";
+  const parts = [];
+  if (resp) parts.push(labels[resp.wordTiming] || labels.waiting);
+  // The audio model runs outside the page, so its progress and its failures have
+  // to be reported separately from what the highlighted word times came from.
+  if (resp && resp.audioJob === "running") parts.push(t("karaokeStatusAudioRunning", "音频对齐处理中…"));
+  else if (resp && resp.audioJob === "failed") {
+    parts.push(t("karaokeStatusAudioFailed", "音频对齐失败：确认本机辅助程序在运行，然后重新对齐"));
+  }
+  if (resp && resp.audioStale) {
+    parts.push(t("karaokeStatusAudioStale", "原有的音频对齐结果已不适用于当前字幕，需要重新对齐"));
+  }
+  const timingText = parts.length ? parts.join(" · ") : "";
   if (timing && timing.textContent !== timingText) timing.textContent = timingText;
 }
 
@@ -427,6 +442,7 @@ function bindUI() {
   $("offsetMsV").textContent = formatOffset(state.offsetMs);
   $("karaoke").checked = state.karaoke;
   $("karaokeApproximate").checked = state.karaokeApproximate;
+  $("timingMode").value = state.timingMode;
   $("karaokeBg").value = state.karaokeBg;
   $("karaokeTextColor").value = state.karaokeTextColor;
   $("karaokeOpacity").value = state.karaokeOpacity;
@@ -558,6 +574,17 @@ function wire() {
     });
   });
   $("karaokeApproximate").addEventListener("change", (e) => setKey("karaokeApproximate", e.target.checked));
+  $("timingMode").addEventListener("change", (e) => {
+    const mode = e.target.value;
+    setKey("timingMode", mode);
+    // "approximate" means no audio model and no automatic-caption matching, so
+    // turning it on without the estimate would leave nothing to highlight.
+    if (mode === "approximate" && !state.karaokeApproximate) {
+      state.karaokeApproximate = true;
+      $("karaokeApproximate").checked = true;
+      setKey("karaokeApproximate", true);
+    }
+  });
   $("karaokeBg").addEventListener("input", (e) => setKey("karaokeBg", e.target.value));
   $("karaokeTextColor").addEventListener("input", (e) => setKey("karaokeTextColor", e.target.value));
   $("karaokeOpacity").addEventListener("input", (e) => {
