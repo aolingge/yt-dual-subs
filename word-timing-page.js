@@ -57,28 +57,106 @@
     return piecesAt(text, parts, timed.map((w) => w.t));
   }
 
+  // Speech duration tracks syllables, not characters: German compounds are long
+  // but few syllables, and digits are short but spoken long ("1990" is
+  // "neunzehnhundertneunzig"). Display-only estimation, never written back into
+  // the raw caption cues.
+  const VOWELS = /[aeiouyäöüáàâãéèêëíìîïóòôõúùûæœø]+/gu;
+  const CJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/gu;
+  function syllables(word, language) {
+    const text = String(word || "");
+    if (!text) return 1;
+    const cjk = text.match(CJK);
+    if (cjk && cjk.length) return Math.min(8, cjk.length);
+    if (/\d/u.test(text)) {
+      let count = 0;
+      for (const ch of text) count += /\d/u.test(ch) ? 1.5 : 0.75;
+      return Math.max(1, Math.min(8, Math.round(count)));
+    }
+    const groups = text.toLowerCase().match(VOWELS);
+    let count = groups ? groups.length : 1;
+    // A silent final "e" is not a syllable in English ("make", "time").
+    if (String(language || "").toLowerCase().startsWith("en") && count > 1 &&
+        /[^aeiou]e$/u.test(text.toLowerCase())) count -= 1;
+    return Math.max(1, Math.min(8, count));
+  }
+
+  // A pause belongs to the gap between two words, not to the word before it.
+  function pauseAfter(gap, word) {
+    const marks = gap.match(/[.!?。！？…,，、;；:：—–]/gu);
+    if (!marks) return 0;
+    const mark = marks[marks.length - 1];
+    // "z. B." / "u. a." / "d. h." are abbreviations, not sentence ends: a single
+    // letter never ends a sentence.
+    if (mark === "." && word.length === 1 && /\p{L}/u.test(word)) return 0;
+    if (".!?。！？…".includes(mark)) return 260;
+    if ("—–".includes(mark)) return 180;
+    if (";；:：".includes(mark)) return 160;
+    return 120;
+  }
+
+  const SYLLABLE_MS = { de: 215, en: 225, nl: 215, sv: 215, da: 215, es: 200,
+    fr: 205, it: 200, pt: 205, ru: 220, pl: 210, tr: 200, zh: 175, ja: 165,
+    ko: 185, vi: 200, th: 200, id: 200 };
+  function syllableMs(language, measured) {
+    if (Number.isFinite(measured)) return Math.max(90, Math.min(500, measured));
+    const code = String(language || "").toLowerCase();
+    for (const key of Object.keys(SYLLABLE_MS)) {
+      if (code.startsWith(key)) return SYLLABLE_MS[key];
+    }
+    return 205;
+  }
+
   // This is display-only estimation, never written into the raw caption cues.
-  function estimate(cue, language) {
+  function estimate(cue, language, options) {
     if (!cue) return null;
     const end = Number.isFinite(cue.end) ? cue.end : cue.start + cue.dur;
     if (!Number.isFinite(cue.start) || !Number.isFinite(end) || end <= cue.start) return null;
     const text = String(cue.text || "");
     const parts = tokens(text, language);
     if (!parts.length) return null;
-    const weights = parts.map((p, i) => {
+    const perSyllable = syllableMs(language, options && options.syllableMs);
+    const spans = parts.map((p, i) => {
       const following = text.slice(p.index + p.text.length,
         i + 1 < parts.length ? parts[i + 1].index : text.length);
-      return Math.min(10, Math.max(2, [...p.text].length)) +
-        (/[,.!?;:。，！？；：]/u.test(following) ? 2 : 0);
+      return { dur: syllables(p.text, language) * perSyllable,
+        pause: i + 1 < parts.length ? pauseAfter(following, p.text) : 0 };
     });
-    const total = weights.reduce((a, b) => a + b, 0);
-    let progress = 0;
-    const times = weights.map((w) => {
-      const t = cue.start + (end - cue.start) * progress / total;
-      progress += w;
-      return t;
+    const speech = spans.reduce((sum, span) => sum + span.dur + span.pause, 0);
+    if (!(speech > 0)) return null;
+    // A caption cue can carry trailing silence, so never stretch the words past
+    // 1.4x their natural length to fill one; squeeze them when the cue is too
+    // short for its text.
+    const scale = Math.min(1.4, Math.max(0.35, (end - cue.start) / speech));
+    let at = cue.start;
+    const times = spans.map((span) => {
+      const t = at;
+      at += (span.dur + span.pause) * scale;
+      return Math.min(t, end);
     });
     return piecesAt(text, parts, times);
+  }
+
+  // Measure this video's own pace from cues that already carry real word times,
+  // so untimed cues in the same video are estimated at the speaker's speed.
+  function speakingRate(cues, language) {
+    const rates = [];
+    for (const cue of Array.isArray(cues) ? cues : []) {
+      if (rates.length >= 60) break;
+      if (!captionPieces(cue, language)) continue;
+      const parts = tokens(String(cue.text || ""), language);
+      const first = Array.isArray(cue.words) && cue.words.length
+        ? cue.words[0].t : NaN;
+      const end = Number.isFinite(cue.end) ? cue.end : cue.start + cue.dur;
+      if (!Number.isFinite(first) || !(end > first) || first < cue.start - 50) continue;
+      const count = parts.reduce((sum, p) => sum + syllables(p.text, language), 0);
+      if (count < 4) continue;
+      rates.push((end - first) / count);
+    }
+    if (rates.length < 3) return null;
+    rates.sort((a, b) => a - b);
+    const median = rates[rates.length >> 1];
+    return Number.isFinite(median) ? Math.max(90, Math.min(500, median)) : null;
   }
 
   function lowerBound(words, time) {
@@ -134,7 +212,7 @@
     return count;
   }
 
-  const api = Object.freeze({ tokens, captionPieces, estimate, align });
+  const api = Object.freeze({ tokens, syllables, captionPieces, estimate, speakingRate, align });
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.YtdsWordTiming = api;
 })(typeof window === "object" ? window : globalThis);

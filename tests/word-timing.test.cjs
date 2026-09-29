@@ -101,6 +101,88 @@ test('approximate progress follows the video clock, including pause, seek and sy
   assert.equal(player.status().wordTiming, 'off');
 });
 
+test('estimation spends time by syllables and digits instead of character length', () => {
+  assert.equal(timing.syllables('Streichholzschächtelchen', 'de'), 5);
+  assert.equal(timing.syllables('und', 'de'), 1);
+  assert.equal(timing.syllables('Bahn', 'de'), 1);
+  assert.equal(timing.syllables('1990', 'de'), 6);
+  assert.equal(timing.syllables('make', 'en'), 1, 'a silent final e is not a syllable');
+  assert.equal(timing.syllables('今日は', 'ja'), 3);
+  const pieces = timing.estimate({ start: 0, dur: 9000,
+    text: 'Wir treffen uns um 19:30 Uhr, danach gehen wir essen.' }, 'de');
+  const span = (from, to) => {
+    const times = pieces.map((p) => p.t);
+    return times[to] - times[from];
+  };
+  const words = pieces.map((p) => p.u.trim());
+  assert.ok(span(words.indexOf('19:'), words.indexOf('Uhr,')) >
+    span(words.indexOf('uns'), words.indexOf('um')),
+  'the spoken number holds more time than a short word');
+});
+
+test('estimation puts a real pause at punctuation but not inside an abbreviation', () => {
+  const pieces = timing.estimate({ start: 0, dur: 6000,
+    text: 'Wir treffen z. B. Anna, morgen.' }, 'de');
+  const gapAfter = (word) => {
+    const i = pieces.findIndex((p) => p.u.trim() === word);
+    assert.ok(i >= 0 && i + 1 < pieces.length, word);
+    return pieces[i + 1].t - pieces[i].t;
+  };
+  assert.ok(gapAfter('B.') < gapAfter('Anna,'), 'z. B. is not a sentence end');
+  assert.ok(gapAfter('Anna,') > gapAfter('B.'));
+  const stop = timing.estimate({ start: 0, dur: 6000, text: 'Ja. Nein.' }, 'de');
+  assert.ok(stop[1].t - stop[0].t > timing.syllables('Ja', 'de') * 215,
+    'a full stop adds pause time');
+});
+
+test('a cue holding trailing silence does not stretch the words across it', () => {
+  const pieces = timing.estimate({ start: 0, dur: 10000, text: 'Guten Tag auch.' }, 'de');
+  assert.ok(pieces.at(-1).t < 2500, 'the last word starts near its spoken time');
+  const short = timing.estimate({ start: 0, dur: 400, text: 'Guten Tag auch.' }, 'de');
+  assert.ok(short.every((p) => p.t >= 0 && p.t < 400), 'a short cue still fits');
+  assert.ok(short[1].t < pieces[1].t, 'a short cue squeezes the words together');
+});
+
+test('a measured pace is taken from timed cues, clamped, and needs three samples', () => {
+  const paced = (start, times) => ({ start, dur: 1200, text: 'Hallo schöne Welt.',
+    words: [{ t: times[0], u: 'Hallo' }, { t: times[1], u: 'schöne' },
+      { t: times[2], u: 'Welt' }] });
+  assert.equal(timing.speakingRate([paced(0, [0, 400, 800])], 'de'), null);
+  assert.equal(timing.speakingRate([paced(0, [0, 400, 800]), paced(2000, [2000, 2400, 2800])],
+    'de'), null, 'two samples are not enough');
+  assert.equal(Math.round(timing.speakingRate([
+    paced(0, [0, 400, 800]), paced(2000, [2000, 2400, 2800]), paced(4000, [4000, 4400, 4800])],
+  'de')), 240);
+  assert.equal(timing.speakingRate([
+    { start: 0, dur: 40000, text: 'Hallo schöne Welt.', words: [{ t: 0, u: 'Hallo' },
+      { t: 10000, u: 'schöne' }, { t: 20000, u: 'Welt' }] },
+    { start: 50000, dur: 40000, text: 'Hallo schöne Welt.', words: [{ t: 50000, u: 'Hallo' },
+      { t: 60000, u: 'schöne' }, { t: 70000, u: 'Welt' }] },
+    { start: 100000, dur: 40000, text: 'Hallo schöne Welt.', words: [{ t: 100000, u: 'Hallo' },
+      { t: 110000, u: 'schöne' }, { t: 120000, u: 'Welt' }] }], 'de'), 500,
+  'an implausible pace is clamped');
+  const slow = timing.estimate({ start: 0, dur: 4000, text: 'Hallo schöne Welt.' }, 'de',
+    { syllableMs: 300 });
+  const fast = timing.estimate({ start: 0, dur: 4000, text: 'Hallo schöne Welt.' }, 'de',
+    { syllableMs: 150 });
+  assert.ok(slow[1].t > fast[1].t, 'the measured pace moves the word starts');
+});
+
+test('the video\'s own measured pace reshapes the estimate while it plays', async () => {
+  const paced = (start) => ({ start, dur: 1500, text: 'Hallo schöne Welt.',
+    words: [{ t: start, u: 'Hallo' }, { t: start + 600, u: 'schöne' },
+      { t: start + 1200, u: 'Welt' }] });
+  const untimed = { start: 0, dur: 4000, text: 'Hallo schöne Welt.' };
+  const measured = await mountContent({ cues: [untimed,
+    paced(100000), paced(102000), paced(104000)] });
+  const plain = await mountContent({ cues: [{ ...untimed }] });
+  measured.at(.7);
+  plain.at(.7);
+  assert.equal(measured.status().wordTiming, 'estimated');
+  assert.equal(measured.activeWordIdx(), 0, 'the speaker\'s slow pace is used');
+  assert.equal(plain.activeWordIdx(), 1, 'without samples the default pace applies');
+});
+
 test('late automatic times upgrade the current sentence without resetting reveal or translation', async () => {
   const original = { start: 0, dur: 4000, text: 'Hallo schöne Welt.', trans: '你好，美丽的世界。' };
   const player = await mountContent({ cues: [original], settings: { revealMode: 'manual' } });

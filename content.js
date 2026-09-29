@@ -1199,6 +1199,19 @@
   // ---- karaoke: word-level highlight ---------------------------------------
   // Real caption offsets take priority. Estimation is visibly labeled and is
   // computed only for rendering, so exports and cached source times stay intact.
+  // The video's own pace, measured once from the cues that do carry real word
+  // times, keeps the estimate for untimed cues at this speaker's speed.
+  let rateMemo = { list: null, lang: null, value: null };
+  function estimatedPieces(clean) {
+    const timing = window.YtdsWordTiming;
+    if (rateMemo.list !== cueList || rateMemo.lang !== cueSourceLang) {
+      rateMemo = { list: cueList, lang: cueSourceLang,
+        value: timing.speakingRate(cueList, cueSourceLang) };
+    }
+    const options = rateMemo.value ? { syllableMs: rateMemo.value } : undefined;
+    return timing.estimate(clean, cueSourceLang, options);
+  }
+
   function buildWordPieces(cue) {
     if (!settings.karaoke || !cue || !window.YtdsWordTiming) return null;
     const clean = { ...cue, text: stripSoundDescriptions(cue.text),
@@ -1206,8 +1219,7 @@
         ? cue.words.map((w) => w && ({ ...w, u: stripSoundDescriptions(w.u) })) : null };
     const pieces = window.YtdsWordTiming.captionPieces(clean, cueSourceLang);
     if (pieces) return { pieces, source: cue.wordTimingSource || "captions" };
-    const estimated = settings.karaokeApproximate
-      ? window.YtdsWordTiming.estimate(clean, cueSourceLang) : null;
+    const estimated = settings.karaokeApproximate ? estimatedPieces(clean) : null;
     return estimated ? { pieces: estimated, source: "estimated" } : null;
   }
 
