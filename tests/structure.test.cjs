@@ -49,10 +49,10 @@ test('every localized string the extension asks for exists in all three locales'
     locales[name] = JSON.parse(read(path.join('_locales', name, 'messages.json')));
   }
   const asked = new Set();
-  for (const m of read('popup.html').matchAll(/data-i18n(?:-html|-title|-aria|-placeholder)?="([^"]+)"/g)) {
-    asked.add(m[1]);
+  for (const html of ['popup.html', 'alignment.html']) {
+    for (const m of read(html).matchAll(/data-i18n(?:-html|-title|-aria|-placeholder)?="([^"]+)"/g)) asked.add(m[1]);
   }
-  for (const file of ['popup.js', 'study.js', 'content.js']) {
+  for (const file of ['popup.js', 'study.js', 'content.js', 'alignment.js']) {
     for (const m of read(file).matchAll(/\bt\(\s*["']([A-Za-z0-9_]+)["']/g)) asked.add(m[1]);
   }
   assert.ok(asked.size > 20, 'the localization scan found the UI strings');
@@ -78,4 +78,11 @@ test('early page and isolated scripts use different timing paths with identical 
   assert.deepEqual(page.js, ['word-timing-page.js', 'inject.js']);
   assert.deepEqual(isolated.js, ['settings.js', 'word-timing.js', 'content.js']);
   assert.equal(read('word-timing-page.js'), read('word-timing.js'), 'keep the page copy synchronized');
+});
+
+test('audio helper access is optional and limited to the loopback host', () => {
+  const manifest = JSON.parse(read('manifest.json'));
+  assert.deepEqual(manifest.permissions, ['storage']);
+  assert.deepEqual(manifest.optional_host_permissions, ['http://127.0.0.1/*']);
+  assert.equal(read('alignment.js').includes('credentials: "omit"'), true);
 });

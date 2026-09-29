@@ -15,7 +15,7 @@ Original captions, translations, word lookup, and sentence practice — right on
 </p>
 
 <p align="center">
-  <img alt="Source version 3.9.2" src="https://img.shields.io/badge/source-3.9.2-3ea6ff" />
+  <img alt="Source version 3.10.0" src="https://img.shields.io/badge/source-3.10.0-3ea6ff" />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -60,6 +60,7 @@ In **Study**, enable **Box the word being spoken**. The complete sentence stays 
 | Original track provides individual word times | Highlight follows those caption word times. |
 | Original has sentence times; a same-language automatic track has matching words | Reliable, nearby word matches supply timestamps without changing your selected original text. |
 | No reliable word match | **Approximate** progress, clearly labeled in the video and estimated from sentence duration. |
+| No reliable word match, and the optional audio helper has measured the speech | Word times aligned to the audio for German and English, labeled in the video as audio-derived. |
 
 Approximate progress is enabled by default. Turn off **Use approximate progress when word times are missing** to require caption word timestamps; unmatched sentences then remain visible without a word highlight. The popup shows the source used for the current sentence.
 
@@ -71,7 +72,9 @@ In **Study → Word highlight style**, adjust the background color, highlighted 
 
 *Actual v3.9.1 interface using controlled caption timestamps and a demo video. This illustrates the feature, not measured alignment to German speech.*
 
-This works across supported caption languages and needs no API key or setup per video. Videos must provide usable captions. Even automatic-caption timestamps can be imperfect; approximate progress is a reading aid, not precise speech alignment. The extension does not transcribe audio, so it cannot guarantee exact word following for every video or create missing captions.
+This works across supported caption languages and needs no API key or setup per video. Videos must provide usable captions. Even automatic-caption timestamps can be imperfect; approximate progress is a reading aid, not precise speech alignment. The extension never invents captions, so a video without a caption track still has nothing to show.
+
+When no reliable caption word times exist, **Audio-aligned highlighting** can measure them from the video's audio instead. Choose it in the popup's study card to open its own page, which reports what is already cached and what remains. It uses a separate local helper that you start yourself and supports German and English; the first analysis downloads a model (about 360 MB per language) and later videos reuse it. Results stay on your computer, so reopening a video keeps the highlight, and measured times are labeled in the video. Caption word times always win over measured ones. Setup and limits: [docs/AUDIO_ALIGNMENT.md](docs/AUDIO_ALIGNMENT.md).
 
 <table>
   <tr>
@@ -97,7 +100,7 @@ For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load un
 
 **Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
 
-The current source is **3.9.2**, including earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these fixes. See the [3.9.2 update notes](docs/releases/v3.9.2.md).
+The current source is **3.10.0**, adding optional audio-aligned word highlighting on top of 3.9.2's earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these updates. See the [3.10.0 update notes](docs/releases/v3.10.0.md).
 
 Browser references: [Edge sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome unpacked extension guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked).
 
@@ -201,7 +204,7 @@ Read the [full privacy and permission details](docs/PRIVACY.md).
 
 Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
 
-Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.9.2 update notes](docs/releases/v3.9.2.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.10.0 update notes](docs/releases/v3.10.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
 
 ## Credits and license
 

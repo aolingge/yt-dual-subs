@@ -4,6 +4,7 @@
 
 importScripts("settings.js");
 YtdsSettings.startSync();
+importScripts("word-timing.js", "audio-cache.js");
 
 const CACHE = new Map();          // key: `${sl}\u0000${tl}\u0000${text}` -> translated string
 const CACHE_MAX = 2000;           // simple LRU-ish cap

@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="源码版本 3.9.2" src="https://img.shields.io/badge/source-3.9.2-3ea6ff" />
+  <img alt="源码版本 3.10.0" src="https://img.shields.io/badge/source-3.10.0-3ea6ff" />
   <a href="LICENSE"><img alt="MIT 开源许可" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Chrome 和 Edge 桌面浏览器" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="无需 API 密钥" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -60,6 +60,7 @@
 | 原字幕有逐词时间 | 直接跟随字幕词时间。 |
 | 原字幕只有句子时间，同语言自动字幕有对应词时间 | 匹配附近且明确对应的词，补充时间，保留你选择的原文内容。 |
 | 无法可靠匹配词时间 | 按句子时长显示**近似跟读**，画面明确标注。 |
+| 无法可靠匹配词时间，且可选的音频对齐已完成 | 用音频量出德语或英语的词时间，画面标注来源为音频对齐。 |
 
 近似跟读默认开启。如果只想使用字幕给出的词时间，关闭**无词时间时启用近似跟读**即可；无法匹配的句子仍完整显示。设置面板会显示当前句采用的时间来源。
 
@@ -71,7 +72,9 @@
 
 *图中是 3.9.1 实际界面，使用受控字幕时间与演示视频，展示功能操作；没有测量与德语语音的实际对齐精度。*
 
-各字幕语言都使用这套流程，无需为每个视频设置，也不要求 API 密钥。视频需要有可用字幕；自动字幕自身的词时间也可能有误差。近似跟读只是阅读辅助，不能代表精确朗读时间。扩展当前不识别音频，因此不能保证所有视频精确逐词跟随，也无法凭空生成缺失的字幕。
+各字幕语言都使用这套流程，无需为每个视频设置，也不要求 API 密钥。视频需要有可用字幕；自动字幕自身的词时间也可能有误差。近似跟读只是阅读辅助，不能代表精确朗读时间。扩展不会凭空生成字幕，没有字幕轨的视频仍然无法显示。
+
+字幕没有可靠词时间时，可以用**音频对齐跟读**：从视频音频里量出词时间。在弹窗的跟读卡片里打开它自己的页面，页面会显示已经缓存了多少、还剩多少。它依赖你自己启动的本机处理程序，支持德语和英语；第一次分析会下载约 360 MB 的模型，之后的视频复用同一个模型。结果保存在本机，重新打开视频仍可直接使用，量出的词时间会在画面中标注来源。字幕自带词时间始终优先于音频测量结果。准备步骤与限制见 [docs/AUDIO_ALIGNMENT.md](docs/AUDIO_ALIGNMENT.md)。
 
 <table>
   <tr>
@@ -99,7 +102,7 @@
 
 **更新时：**将新版文件覆盖到同一个扩展文件夹，在扩展管理页点击重新加载，然后**刷新已打开的 YouTube 标签页**。收藏句子保存在扩展本地；卸载前请[导出收藏备份](#隐私与数据)。
 
-当前源码为 **3.9.2**，包含字幕提前启动、字幕请求合并、可调高对比度高亮、自动恢复及设置合并保存。[最新发行包](https://github.com/aolingge/yt-dual-subs/releases/latest)仍为 **3.9.0**；要使用这些修复，请下载源码 ZIP 或使用 Git 克隆。可查看 [3.9.2 更新说明](docs/releases/v3.9.2.md#中文)。
+当前源码为 **3.10.0**，在 3.9.2 的字幕提前启动、字幕请求合并、可调高对比度高亮、自动恢复与设置合并保存之上，新增可选的音频对齐跟读。[最新发行包](https://github.com/aolingge/yt-dual-subs/releases/latest)仍为 **3.9.0**；要使用这些更新，请下载源码 ZIP 或使用 Git 克隆。可查看 [3.10.0 更新说明](docs/releases/v3.10.0.md#中文)。
 
 浏览器官方教程：[Edge 本地加载扩展](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome 加载已解压扩展](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)。
 
@@ -203,7 +206,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 
 遇到问题可[提交 Issue](https://github.com/aolingge/yt-dual-subs/issues)，说明浏览器与扩展版本、字幕语言、翻译模式和复现步骤。有帮助时可附公开视频链接，请勿上传个人信息。
 
-欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.9.2 更新说明](docs/releases/v3.9.2.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
+欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.10.0 更新说明](docs/releases/v3.10.0.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
 
 ## 致谢与许可
 

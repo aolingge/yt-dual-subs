@@ -223,7 +223,8 @@ html.ytds-active.ytds-rendering .caption-window {
 }
 /* This label stays visible whenever word positions are estimated. The pseudo
    element is excluded from text selection/copy and participates in layout. */
-.ytds-karaoke-estimated .ytds-orig::before {
+.ytds-karaoke-estimated .ytds-orig::before,
+.ytds-karaoke-audio .ytds-orig::before {
   content: attr(data-ytds-timing-label);
   display: block;
   font: 500 11px/1.4 system-ui, sans-serif;
