@@ -11,20 +11,35 @@
         !Array.isArray(record.segments) || record.segments.length > 5000) throw new Error("invalidAudioTiming");
     // Results are only reusable for the exact same subtitles, language, model,
     // algorithm version and audio offset that produced them.
+    const wanted = YtdsWordTiming.AUDIO_RECORD_VERSION || 0;
     if (!/^[0-9a-f]{8}$/.test(record.cuesKey || "") ||
-        !Number.isInteger(record.version) || record.version < 1 ||
+        !Number.isInteger(record.version) || record.version < (wanted || 1) ||
         typeof record.model !== "string" || !record.model.length || record.model.length > 200 ||
         !Number.isFinite(record.offsetMs) || record.offsetMs < 0) throw new Error("invalidAudioTiming");
-    const checked = record.segments.map(s => ({ start: s?.start, dur: s?.dur, text: s?.text }));
-    YtdsWordTiming.applyAudio(checked, record.segments, record.sourceLang);
-    const segments = checked.filter(s => s.wordTimingSource === "audio");
+    // Every sentence keeps the position in the track it was aligned at. The
+    // batch is placed at those positions so the shared validity check runs
+    // exactly as the renderer runs it: a batch the page would refuse is never
+    // stored as a success.
+    const cues = [];
+    for (const s of record.segments) {
+      if (!s || !Number.isInteger(s.index) || s.index < 0 || s.index > 5000 || cues[s.index]) {
+        throw new Error("invalidAudioTiming");
+      }
+      cues[s.index] = { index: s.index, start: s.start, dur: s.dur, text: s.text };
+    }
+    if (!cues.length) throw new Error("invalidAudioTiming");
+    YtdsWordTiming.applyAudio(cues, record.segments, record.sourceLang);
+    const segments = cues.filter(s => s && s.wordTimingSource === "audio");
     if (!segments.length) throw new Error("invalidAudioTiming");
     const value = { videoId: record.videoId, sourceLang: record.sourceLang,
       cuesKey: record.cuesKey, model: record.model, version: record.version,
       offsetMs: record.offsetMs, segments };
     if (JSON.stringify(value).length > MAX_BYTES / 2) throw new Error("audioCacheTooLarge");
     const saved = await chrome.storage.local.get(KEY);
-    const records = Array.isArray(saved[KEY]) ? saved[KEY] : [];
+    // A record from an older algorithm version can never be applied again, so
+    // writing new results also drops it instead of keeping dead weight.
+    const records = (Array.isArray(saved[KEY]) ? saved[KEY] : [])
+      .filter(r => !wanted || (Number.isInteger(r?.version) && r.version >= wanted));
     const same = r => r.videoId === value.videoId && r.sourceLang === value.sourceLang &&
       r.cuesKey === value.cuesKey && r.model === value.model && r.version === value.version &&
       r.offsetMs === value.offsetMs;

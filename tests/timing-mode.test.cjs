@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { mountContent } = require('./harness.cjs');
 
 const cue = { start: 0, dur: 4000, text: 'Hallo schöne Welt.', trans: '你好，美丽的世界。' };
-const segment = () => ({ start: 0, dur: 4000, text: cue.text, words: [
+const segment = () => ({ index: 0, start: 0, dur: 4000, text: cue.text, words: [
   { t: 200, e: 600, u: 'Hallo', score: .9 },
   { t: 1300, e: 1800, u: 'schöne', score: .8 },
   { t: 2600, e: 3100, u: 'Welt', score: .85 }
@@ -36,13 +36,15 @@ test('changing the mode reaches the running page without a reload', async () => 
 });
 
 test('approximate mode keeps audio alignment results out of the page', async () => {
-  const record = { videoId: 'sample', sourceLang: 'de', segments: [segment()] };
   const approximate = await mountContent({ cues: [{ ...cue }], settings: { timingMode: 'approximate' } });
   approximate.seekTo(1.5);
-  assert.equal(approximate.request({ type: 'applyAudioTiming', record }).count, 0);
+  assert.equal(approximate.request({ type: 'applyAudioTiming',
+    record: { videoId: 'sample', sourceLang: 'de', version: 2, segments: [segment()] } }).count, 0);
   assert.equal(approximate.status().wordTiming, 'estimated');
   const auto = await mountContent({ cues: [{ ...cue }] });
   auto.seekTo(1.5);
+  const record = { videoId: 'sample', sourceLang: 'de', version: 2, segments: [segment()],
+    cuesKey: auto.request({ type: 'audioIdentity' }).cuesKey };
   assert.equal(auto.request({ type: 'applyAudioTiming', record }).count, 1);
   assert.equal(auto.status().wordTiming, 'audio');
 });

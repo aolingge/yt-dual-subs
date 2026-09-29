@@ -109,7 +109,10 @@ test('numbers and abbreviations match across caption and automatic spellings', (
   const cases = [
     ['Das kostet 1.000 Euro', 'das kostet 1000 euro'],
     ['etwa 1,5 Stunden', 'etwa 1.5 stunden'],
-    ['Komm z. B. um 19:30 Uhr', 'komm z.b. um 19:30 uhr']
+    ['Komm z. B. um 19:30 Uhr', 'komm z.b. um 19:30 uhr'],
+    ['Komm um 19:30 Uhr', 'komm um 19.30 uhr'],
+    ['Das kostet 1 000 Euro', 'das kostet 1000 euro'],
+    ['Im Jahr 1 500 wurde es gebaut', 'im jahr 1500 wurde es gebaut']
   ];
   for (const [text, donorText] of cases) {
     const cues = [{ start: 0, dur: 4000, text }];
@@ -176,7 +179,9 @@ test('estimation spends time by syllables and digits instead of character length
     return times[to] - times[from];
   };
   const words = pieces.map((p) => p.u.trim());
-  assert.ok(span(words.indexOf('19:'), words.indexOf('Uhr,')) >
+  // A clock time is one word on screen, so it is also one estimated span.
+  assert.ok(words.includes('19:30'), 'the time is estimated as a single word');
+  assert.ok(span(words.indexOf('19:30'), words.indexOf('Uhr,')) >
     span(words.indexOf('uns'), words.indexOf('um')),
   'the spoken number holds more time than a short word');
 });
@@ -227,6 +232,21 @@ test('a measured pace is taken from timed cues, clamped, and needs three samples
   const fast = timing.estimate({ start: 0, dur: 4000, text: 'Hallo schöne Welt.' }, 'de',
     { syllableMs: 150 });
   assert.ok(slow[1].t > fast[1].t, 'the measured pace moves the word starts');
+});
+
+test('a single long interval cannot decide the measured pace', () => {
+  const normal = start => ({ start, dur: 1200, text: 'Hallo schöne Welt.',
+    words: [{ t: start, u: 'Hallo' }, { t: start + 400, u: 'schöne' }, { t: start + 800, u: 'Welt' }] });
+  // A real pause inside a caption is one long interval surrounded by fast ones.
+  // A duration-weighted mean let that one span decide the whole track.
+  const gap = { start: 20000, dur: 32000, text: 'Hallo schöne große Welt',
+    words: [{ t: 20000, u: 'Hallo' }, { t: 50000, u: 'schöne' },
+      { t: 50100, u: 'große' }, { t: 50200, u: 'Welt' }] };
+  const cues = [normal(0), normal(2000), normal(4000), gap];
+  assert.equal(Math.round(timing.speakingRate(cues, 'de')), 200,
+    'the 30 s interval is trimmed instead of slowing the whole video');
+  assert.equal(timing.pace(cues, 'de').global, timing.speakingRate(cues, 'de'),
+    'the video-wide rate and the local windows share one measurement');
 });
 
 test('the video\'s own measured pace reshapes the estimate while it plays', async () => {

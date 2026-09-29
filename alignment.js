@@ -3,6 +3,9 @@
 "use strict";
 const AUDIO_BASE = "http://127.0.0.1:8765";
 const AUDIO_ORIGINS = ["http://127.0.0.1/*"];
+// Result format this build applies: 2 adds the track position of every
+// sentence and the audio fingerprint to the helper's cache identity.
+const AUDIO_RECORD_VERSION = 2;
 const audioEl = id => document.getElementById(id);
 const t = (key, fallback = "", subs = []) => chrome.i18n.getMessage(key, subs) || fallback || key;
 const tabId = Number(new URLSearchParams(location.search).get("tab"));
@@ -10,6 +13,7 @@ let context = null;
 let jobId = "";
 let cursor = 0;
 let segments = [];
+let applied = 0;
 let pollTimer = null;
 let lastSaved = 0;
 let permissionReady = false;
@@ -133,6 +137,18 @@ function fileDurationMs(file) {
   });
 }
 
+// Identity of the audio a job belongs to: the video's public track, or a local
+// file described by its size and the hash of its first 4 MiB. The helper
+// recomputes it from the bytes it receives, so replacing the file produces a
+// new job instead of reusing word times measured on the previous recording.
+const AUDIO_HEAD_BYTES = 4 * 1024 * 1024;
+async function audioIdentity(file) {
+  if (!file) return "video";
+  const digest = await crypto.subtle.digest("SHA-256", await file.slice(0, AUDIO_HEAD_BYTES).arrayBuffer());
+  const hex = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+  return "local:" + file.size + "-" + hex.slice(0, 16);
+}
+
 // The job belongs to the video and subtitle track it started from. Polling the
 // tab's identity lets a switched video or track stop the work instead of
 // burning CPU on results that may no longer be applied.
@@ -163,7 +179,11 @@ async function poll() {
       segments.push(...snapshot.segments);
       cursor = snapshot.nextCursor;
       const reply = await tabMessage({ type: "applyAudioTiming", record: { ...recordContext, segments: snapshot.segments } });
-      audioEl("delivery").textContent = reply?.ok ? t("audioDelivered") : t("audioVideoChanged");
+      // Nothing applied must never read as delivered: the highlight would keep
+      // showing estimated times while the page claims the audio result is in.
+      if (!reply?.ok) audioEl("delivery").textContent = t("audioVideoChanged");
+      else if (Number(reply.count)) { applied += Number(reply.count); audioEl("delivery").textContent = t("audioDelivered"); }
+      else audioEl("delivery").textContent = t("audioStaleCache");
       if (Date.now() - lastSaved > 5000) await saveResults();
     }
     audioEl("progress").hidden = false;
@@ -188,6 +208,9 @@ async function poll() {
       await saveResults();
       setJobState("done");
       if (!snapshot.aligned && snapshot.status === "done") status("audioNoMatches", true);
+      // The helper finished, but the page refused every sentence: that is not
+      // a success, and the popup must be able to say what to do about it.
+      else if (!applied) status("audioStaleCache", true);
       controls(false);
       return;
     }
@@ -209,6 +232,18 @@ async function start(file) {
     if (!await refreshContext() || !context.cues.length) return;
     controls(true);
     const health = await api("/health");
+    // A helper of an older result format cannot produce track-locked word
+    // times, and its results would be refused silently after a full model run.
+    // Restarting the helper from this folder is the fix, so say so before it
+    // starts rather than after it finishes.
+    if (!(Number(health.version) >= AUDIO_RECORD_VERSION)) {
+      audioEl("status").textContent = t("audioHelperOld",
+        "The local helper is older than this extension build. Restart it from tools/Start-AudioAlignment.cmd, then retry.");
+      audioEl("status").classList.add("error");
+      audioEl("setup").open = true;
+      controls(false);
+      return;
+    }
     const language = audioEl("language").value;
     const offset = file ? offsetMs() : 0;
     if (file) {
@@ -221,7 +256,8 @@ async function start(file) {
     }
     await YtdsSettings.set({ karaoke: true });
     const request = { videoId: context.videoId, language, offsetMs: offset,
-      positionMs: context.positionMs, cues: context.cues.filter(c => c.tokens.length) };
+      positionMs: context.positionMs, audioId: await audioIdentity(file),
+      cues: context.cues.filter(c => c.tokens.length) };
     // The result is only valid for this video, these subtitles, this model,
     // this helper version and this audio offset — all of them identify the job.
     recordContext = { videoId: context.videoId, sourceLang: context.sourceLang,
@@ -229,7 +265,7 @@ async function start(file) {
       version: Number(health.version) || 0, offsetMs: offset };
     const created = await api("/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
     jobId = created.id;
-    cursor = 0; segments = []; lastSaved = 0; lastIdentityCheck = Date.now();
+    cursor = 0; segments = []; applied = 0; lastSaved = 0; lastIdentityCheck = Date.now();
     setJobState("running");
     clearTimeout(pollTimer);
     if (file) await api("/jobs/" + jobId + "/audio", {

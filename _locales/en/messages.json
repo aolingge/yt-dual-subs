@@ -251,6 +251,7 @@
   "audioBusy": { "message": "The local helper is busy. Stop an existing job or wait for it to finish." },
   "audioInvalidRequest": { "message": "The captions cannot be analyzed as supplied. Try a shorter captioned video." },
   "audioJobLost": { "message": "The helper restarted. Start the analysis again; completed cached results can be reused." },
+  "audioHelperOld": { "message": "The local helper is older than this extension build, so it cannot produce track-locked word times. Restart it from tools/Start-AudioAlignment.cmd, then retry." },
   "audioPermissionDenied": { "message": "Local site access was not granted. Start again and allow access to 127.0.0.1." },
   "audioFailed": { "message": "Audio analysis did not finish. Check the helper and model download, then retry. Existing subtitles remain usable." }
 }

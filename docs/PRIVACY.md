@@ -25,7 +25,7 @@ Google translation uses `https://translate.googleapis.com/translate_a/single`, a
 - **Preferences:** language, styles, layout, and study settings are written to `chrome.storage.sync`. Unsynced edits and the next retry time are staged in `chrome.storage.local` under `settingsPendingV1`, so changes remain usable after closing the popup or reaching a sync limit. The background batches writes at least 2.5 seconds apart and resumes pending writes when active. Whether preferences sync between devices depends on the browser's extension-sync settings. Browser storage is separate from this GitHub repository.
 - **Saved sentences:** `chrome.storage.local`, under `studyCardsV1`. Cards contain the video ID/title, sentence timing and index, original text, available translation, source language, learned state, and save time. They do **not** sync automatically.
 - **Temporary caches:** caption and translation results can be kept in extension/page memory to reduce repeated requests. They are not sent to a project server.
-- **Audio-alignment results:** word times produced by the optional helper are kept in `chrome.storage.local` under `audioTimingCacheV1`, limited to a few recent videos and a bounded size, keyed by video id, source language, a caption-track hash, model/helper version and audio start offset. The helper separately keeps the downloaded audio, the model, and its results under `%LOCALAPPDATA%\YT Dual Subs\audio-alignment`. Deleting either location only means an analysis has to run again.
+- **Audio-alignment results:** word times produced by the optional helper are kept in `chrome.storage.local` under `audioTimingCacheV1`, limited to a few recent videos and a bounded size, keyed by video id, source language, a caption-track hash, model/helper version, audio start offset and — for an imported file — that file's size and the hash of its first 4 MiB, which lets the extension tell one recording from another. The hash is computed locally and is not a fingerprint of your device. The helper separately keeps the downloaded audio, the model, and its results under `%LOCALAPPDATA%\YT Dual Subs\audio-alignment`. Deleting either location only means an analysis has to run again.
 - **Exports:** SRT and saved-sentence JSON files are downloaded to the location your browser uses. You control whether those files are shared or synchronized elsewhere.
 
 **Back up saved sentences before uninstalling.** Use **Export saved / Import saved** in the popup. Import merges cards with the existing collection; resetting subtitle settings preserves saved cards. Uninstalling removes local extension storage.
@@ -69,7 +69,7 @@ Google 翻译使用 `translate.googleapis.com` 的**非官方免费端点**，�
 
 **收藏句子**保存在 `chrome.storage.local` 的 `studyCardsV1` 中，包含视频编号与标题、句子时间和序号、原文、可用译文、原文语言、掌握状态与收藏时间。收藏不会自动同步；字幕和翻译也可能使用临时内存缓存，减少重复请求。
 
-**音频对齐结果**保存在 `chrome.storage.local` 的 `audioTimingCacheV1` 中，只保留最近几个视频、总大小有上限，键包含视频编号、语言、字幕轨哈希、模型与辅助程序版本和音频起始偏移；辅助程序另在 `%LOCALAPPDATA%\YT Dual Subs\audio-alignment` 保存音频、模型和结果。删除其中任一处只会导致需要重新分析。
+**音频对齐结果**保存在 `chrome.storage.local` 的 `audioTimingCacheV1` 中，只保留最近几个视频、总大小有上限，键包含视频编号、语言、字幕轨哈希、模型与辅助程序版本、音频起始偏移，导入本地文件时还包括该文件的字节数与前 4 MiB 的哈希（用于区分不同录音，完全在本机计算，不是设备指纹）；辅助程序另在 `%LOCALAPPDATA%\YT Dual Subs\audio-alignment` 保存音频、模型和结果。删除其中任一处只会导致需要重新分析。
 
 SRT 与收藏 JSON 下载到浏览器指定的位置，是否分享或通过其他工具同步由你决定。**卸载前请导出收藏备份。**导入会合并而不覆盖现有收藏；重置字幕设置不删除收藏，卸载则会清除扩展本地存储。
 

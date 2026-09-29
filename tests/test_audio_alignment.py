@@ -14,9 +14,12 @@ server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 
 
+def cue(index=0, start=0, text="Hallo Welt", tokens=("Hallo", "Welt")):
+    return {"index": index, "start": start, "dur": 4000, "text": text, "tokens": list(tokens)}
+
+
 def request():
-    return {"videoId": "speechde001", "language": "de", "positionMs": 0,
-            "cues": [{"start": 0, "dur": 4000, "text": "Hallo Welt", "tokens": ["Hallo", "Welt"]}]}
+    return {"videoId": "speechde001", "language": "de", "positionMs": 0, "cues": [cue()]}
 
 
 class AlignmentChecks(unittest.TestCase):
@@ -73,8 +76,7 @@ class AlignmentChecks(unittest.TestCase):
 
     def test_a_local_file_must_cover_the_subtitles_it_is_aligned_against(self):
         data = server.validate_request({**request(), "cues": [
-            {"start": 10_000, "dur": 4000, "text": "Hallo Welt", "tokens": ["Hallo", "Welt"]},
-            {"start": 20_000, "dur": 4000, "text": "Guten Tag", "tokens": ["Guten", "Tag"]}]})
+            cue(0, 10_000), cue(1, 20_000, "Guten Tag", ("Guten", "Tag"))]})
         with tempfile.TemporaryDirectory() as folder:
             jobs = server.Jobs(folder)
             jobs.check_local_audio(data, 25_000, 0)          # full file for the video
@@ -85,10 +87,64 @@ class AlignmentChecks(unittest.TestCase):
             with self.assertRaises(server.AlignmentError) as shifted:
                 jobs.check_local_audio(data, 5_000, 30_000)
             self.assertEqual(shifted.exception.code, "audioMismatch")
-            job = jobs.create({**request(), "cues": [
-                {"start": 10_000, "dur": 4000, "text": "Hallo Welt", "tokens": ["Hallo", "Welt"]}]})
+            job = jobs.create({**request(), "cues": [cue(0, 10_000)]})
             jobs.jobs[job]["audioMs"] = 25_000
             self.assertEqual(jobs.snapshot(job)["audioMs"], 25_000)
+
+    def test_every_sentence_states_the_position_it_was_aligned_at(self):
+        data = server.validate_request({**request(), "cues": [cue(0), cue(3, 5000, "Guten Tag", ("Guten", "Tag"))]})
+        self.assertEqual([c["index"] for c in data["cues"]], [0, 3])
+        # Without its track position a sentence cannot be placed back, and a
+        # repeated or out-of-range position would apply word times measured for
+        # one sentence to another one.
+        for cues in ([{"start": 0, "dur": 4000, "text": "Hallo Welt", "tokens": ["Hallo", "Welt"]}],
+                     [cue(0), cue(0)],
+                     [cue(-1)],
+                     [cue(True)],
+                     [cue(server.MAX_CUES)],
+                     [cue("0")]):
+            with self.assertRaises(server.AlignmentError):
+                server.validate_request({**request(), "cues": cues})
+
+    def test_the_audio_a_result_belongs_to_is_part_of_the_cache_identity(self):
+        # No local file means the video's public track.
+        self.assertEqual(server.validate_request(request())["audioId"], "video")
+        file_a = "local:1234-0123456789abcdef"
+        file_b = "local:1234-fedcba9876543210"
+        self.assertNotEqual(server.cache_key(server.validate_request({**request(), "audioId": file_a})),
+                            server.cache_key(server.validate_request({**request(), "audioId": file_b})))
+        self.assertNotEqual(server.cache_key(server.validate_request(request())),
+                            server.cache_key(server.validate_request({**request(), "audioId": file_a})))
+        for value in ["", "local:", "local:1-ZZZZ", "video ", "http://evil.example/a.wav", 7, None]:
+            with self.assertRaises(server.AlignmentError):
+                server.validate_request({**request(), "audioId": value})
+
+    def test_only_a_complete_result_for_the_same_audio_is_reused(self):
+        data = server.validate_request(request())
+        segments = [{"index": 0, "start": 0, "dur": 4000, "text": "Hallo Welt",
+                     "words": [{"u": "Hallo", "t": 0, "e": 1000, "score": .9}]}]
+        with tempfile.TemporaryDirectory() as folder:
+            jobs = server.Jobs(folder)
+            job = jobs.create(data)
+            key = jobs.jobs[job]["key"]
+            cache = jobs.jobs[job]["folder"] / "timings.json"
+            # An interrupted run, another track, another audio file and a broken
+            # payload must all align again instead of being reported as done.
+            for written in ({"segments": segments},
+                            {"complete": True, "key": "other", "audioId": "video", "total": 1, "segments": segments},
+                            {"complete": True, "key": key, "audioId": "local:1-0123456789abcdef", "total": 1, "segments": segments},
+                            {"complete": True, "key": key, "audioId": "video", "total": 1, "segments": "nope"}):
+                cache.write_text(json.dumps(written), encoding="utf-8")
+                fresh = server.Jobs(folder)
+                again = fresh.create(data)
+                self.assertNotEqual(fresh.snapshot(again)["status"], "done", written)
+            cache.write_text(json.dumps({"complete": True, "key": key, "audioId": "video",
+                                         "total": 1, "segments": segments}), encoding="utf-8")
+            fresh = server.Jobs(folder)
+            again = fresh.create(data)
+            snapshot = fresh.snapshot(again)
+            self.assertEqual(snapshot["status"], "done")
+            self.assertEqual(snapshot["aligned"], 1)
 
     def test_a_trimmed_file_is_windowed_in_audio_time_and_mapped_back(self):
         cue = {"start": 10_000, "dur": 4000}

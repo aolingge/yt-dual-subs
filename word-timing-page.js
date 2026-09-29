@@ -11,12 +11,19 @@
 
   // Numbers are written differently by captions and by automatic tracks: a
   // German caption writes 1000 as "1.000" while the ASR track writes "1000",
-  // and a decimal comma faces a decimal point. The matching key therefore
-  // drops thousands separators and keeps one decimal separator. Only the key
-  // changes: the text that the reader sees is never rewritten.
+  // a decimal comma faces a decimal point, and a clock time is written "19:30"
+  // in one place and "19.30" in another. The matching key therefore drops
+  // thousands separators, keeps one decimal separator and writes a clock time
+  // as h.mm. Only the key changes: the text that the reader sees is never
+  // rewritten.
   const NUMERIC = /^\d[\d.,'\u2019\u00a0\u202f ]*\d$/u;
   const SEPARATORS = /[.,'\u2019\u00a0\u202f ]+/u;
+  const CLOCK = /^(\d{1,2}):(\d{1,2})$/u;
   function numericKey(text) {
+    // "19:30" and "19.30" are the same reading; both become "19.30". A colon is
+    // never a thousands separator, so an unparseable clock time keeps no key.
+    const clock = CLOCK.exec(text);
+    if (clock) return clock[1] + "." + clock[2];
     if (!/^\d$/u.test(text) && !NUMERIC.test(text)) return null;
     if (!SEPARATORS.test(text)) return null;
     const groups = text.split(SEPARATORS);
@@ -29,6 +36,40 @@
     const digits = groups.join("");
     if (!decimal) return digits;
     return digits.slice(0, digits.length - last.length) + "." + last;
+  }
+
+  // German also writes thousands with a space: "1 000" is the same number as
+  // "1.000" and "1000". A digit group followed by whitespace and a group of
+  // exactly three digits is read as one number, so the matching key is the same
+  // on the caption and the automatic side. The span is still sliced from the
+  // original text, so the reader keeps seeing "1 000".
+  const DIGIT_GROUP = /^\d{1,3}(?:\d{3})*$/u;
+  const GROUP_GAP = /^[\s\u00a0\u202f\u2009]+$/u;
+  // A clock time is one reading, but word segmentation cuts "19:30" into "19"
+  // and "30". Joining the digits across the colon restores the time, so it
+  // matches the "19.30" spelling of an automatic track one for one instead of
+  // leaving two numbers that happen to sit next to each other.
+  const CLOCK_GAP = /^\s*:\s*$/u;
+  function mergeNumbers(parts, text, language) {
+    const merged = [];
+    for (let i = 0; i < parts.length; i++) {
+      let part = parts[i];
+      for (;;) {
+        const next = parts[i + 1];
+        if (!next) break;
+        const between = text.slice(part.index + part.text.length, next.index);
+        const thousands = /^\d{3}$/u.test(next.text) && GROUP_GAP.test(between) &&
+          DIGIT_GROUP.test(part.text.replace(GROUP_GAP, ""));
+        const clock = /^\d{1,2}$/u.test(part.text) && /^\d{1,2}$/u.test(next.text) &&
+          CLOCK_GAP.test(between);
+        if (!thousands && !clock) break;
+        const raw = text.slice(part.index, next.index + next.text.length);
+        part = { text: raw, index: part.index, key: keyOf(raw, language) };
+        i++;
+      }
+      merged.push(part);
+    }
+    return merged;
   }
 
   // Everything word matching compares. `normalize` alone is not enough for
@@ -46,7 +87,7 @@
         segmenters.set(locale, new Intl.Segmenter(locale, { granularity: "word" }));
         if (segmenters.size > 8) segmenters.delete(segmenters.keys().next().value);
       }
-      return [...segmenters.get(locale).segment(text)]
+      return mergeNumbers([...segmenters.get(locale).segment(text)]
         .filter((p) => p.isWordLike)
         .flatMap((p) => {
           // "z. B." segments into two words while "z.B." segments into one. Both
@@ -57,10 +98,10 @@
           }
           return [...p.segment.matchAll(/\p{L}/gu)]
             .map((m) => ({ text: m[0], index: p.index + m.index, key: keyOf(m[0], language) }));
-        });
+        }), text, language);
     } catch (_e) {
-      return [...text.matchAll(/[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu)]
-        .map((m) => ({ text: m[0], index: m.index, key: keyOf(m[0], language) }));
+      return mergeNumbers([...text.matchAll(/[\p{L}\p{M}\p{N}]+(?:['’\-][\p{L}\p{M}\p{N}]+)*/gu)]
+        .map((m) => ({ text: m[0], index: m.index, key: keyOf(m[0], language) })), text, language);
     }
   }
 
@@ -109,19 +150,37 @@
       if (words.length > 1) return null;
       if (words.length) timed.push({ key: words[0].key, t: w.t, e: w.e, s: w.s });
     }
-    if (timed.length !== parts.length ||
-        parts.some((p, i) => p.key !== timed[i].key)) return null;
+    // Walk both sides together. A caption track may split one number over two
+    // caption words ("1" then "000") while the text reads "1 000"; joining two
+    // adjacent words is allowed only when their keys spell the one text token.
+    const matched = [];
+    let wi = 0;
+    for (const part of parts) {
+      if (wi >= timed.length) return null;
+      if (timed[wi].key === part.key) {
+        matched.push(timed[wi]);
+        wi++;
+        continue;
+      }
+      if (wi + 1 < timed.length && timed[wi].key + timed[wi + 1].key === part.key) {
+        matched.push({ key: part.key, t: timed[wi].t, e: timed[wi + 1].e, s: timed[wi].s });
+        wi += 2;
+        continue;
+      }
+      return null;
+    }
+    if (wi !== timed.length) return null;
     const end = Number.isFinite(cue.end) ? cue.end : cue.start + cue.dur;
     if (!Number.isFinite(cue.start) || !Number.isFinite(end) ||
-        timed.some((w) => w.t < cue.start - 100 || w.t >= end)) return null;
-    const pieces = piecesAt(text, parts, timed.map((w) => w.t));
+        matched.some((w) => w.t < cue.start - 100 || w.t >= end)) return null;
+    const pieces = piecesAt(text, parts, matched.map((w) => w.t));
     // A sentence can mix matched and estimated word times; carry the per-word
     // provenance so the reader can see which positions are actually known.
-    pieces.forEach((p, i) => { if (timed[i].s) p.s = timed[i].s; });
+    pieces.forEach((p, i) => { if (matched[i].s) p.s = matched[i].s; });
     if (cue.wordTimingSource === "audio") {
-      if (timed.some((w, i) => !Number.isFinite(w.e) || w.e <= w.t || w.e > end ||
-          (i + 1 < timed.length && w.e > timed[i + 1].t))) return null;
-      pieces.forEach((p, i) => { p.e = timed[i].e; });
+      if (matched.some((w, i) => !Number.isFinite(w.e) || w.e <= w.t || w.e > end ||
+          (i + 1 < matched.length && w.e > matched[i + 1].t))) return null;
+      pieces.forEach((p, i) => { p.e = matched[i].e; });
     }
     return pieces;
   }
@@ -246,24 +305,46 @@
     return clampRate(medianOf(kept.length ? kept : values));
   }
 
-  // Measure this video's own pace from cues that already carry real word times,
-  // so untimed cues in the same video are estimated at the speaker's speed.
-  function speakingRate(cues, language) {
-    const rates = [];
+  // A cue needs at least this many spoken syllables to say anything about the
+  // speaker's pace. Below it, one short caption would dominate the statistic.
+  const PACE_MIN_SYLLABLES = 4;
+
+  // One sampler for every pace figure, so the video-wide rate and the local rate
+  // are the same statistic. An interval contributes the milliseconds one spoken
+  // syllable took: a long span between two words therefore carries no more
+  // weight than a short one (a duration-weighted mean let one long gap decide a
+  // whole cue), and the trimming in robustRate works on a scale-free value. Cues
+  // with too few syllables are left out entirely.
+  function paceSamples(cues, language) {
+    const samples = [];
+    let contributors = 0;
     for (const cue of Array.isArray(cues) ? cues : []) {
-      if (rates.length >= 60) break;
       const intervals = cueIntervals(cue, language);
       if (!intervals) continue;
-      let duration = 0, count = 0;
+      const local = [];
+      let syllables = 0;
       for (const interval of intervals) {
-        duration += interval.ms;
-        count += interval.syl;
+        const ms = interval.ms / interval.syl;
+        if (!Number.isFinite(ms) || !(ms > 0)) continue;
+        local.push({ t: interval.t, ms });
+        syllables += interval.syl;
       }
-      if (count < 4) continue;
-      rates.push(duration / count);
+      if (syllables < PACE_MIN_SYLLABLES) continue;
+      contributors++;
+      samples.push(...local);
     }
-    if (rates.length < 3) return null;
-    return clampRate(medianOf(rates));
+    samples.sort((a, b) => a.t - b.t);
+    return { samples, contributors };
+  }
+
+  // Measure this video's own pace from cues that already carry real word times,
+  // so untimed cues in the same video are estimated at the speaker's speed. The
+  // same robust middle is used as for the local pace: one odd caption must not
+  // move the whole video's rate, and a single long interval must not either.
+  function speakingRate(cues, language, measured) {
+    const data = measured || paceSamples(cues, language);
+    if (data.contributors < 3) return null;
+    return robustRate(data.samples);
   }
 
   // How close to the current sentence a measured interval still counts as
@@ -279,17 +360,8 @@
   // video-wide rate. Built once per caption track and queried per sentence, so
   // playback never rescans the whole track for one frame.
   function pace(cues, language) {
-    const samples = [];
-    for (const cue of Array.isArray(cues) ? cues : []) {
-      const intervals = cueIntervals(cue, language);
-      if (!intervals) continue;
-      for (const interval of intervals) {
-        const ms = interval.ms / interval.syl;
-        if (Number.isFinite(ms) && ms > 0) samples.push({ t: interval.t, ms });
-      }
-    }
-    samples.sort((a, b) => a.t - b.t);
-    return { samples, global: speakingRate(cues, language) };
+    const measured = paceSamples(cues, language);
+    return { samples: measured.samples, global: speakingRate(cues, language, measured) };
   }
 
   // The speaker's pace around one point in the video, so an estimate follows a
@@ -506,14 +578,19 @@
     return count;
   }
 
-  // Audio results must describe this exact sentence/window. Native and matched
-  // caption timings keep priority. Partial/weak/foreign results never replace
-  // the existing complete sentence with invented timestamps.
+  // Audio results must describe this exact sentence/window, and the sentence
+  // must still sit where it was when the analysis started. A segment carries the
+  // position it was aligned for; a cue is only filled when its own text,
+  // boundaries AND position agree, so a reordered or re-segmented track cannot
+  // receive another cue's word times. Native and matched caption timings keep
+  // priority. Partial/weak/foreign results never replace the existing complete
+  // sentence with invented timestamps.
   function applyAudio(cues, segments, language) {
     if (!Array.isArray(cues) || !Array.isArray(segments) || segments.length > 5000) return 0;
     const byStart = new Map();
     for (const segment of segments) {
       if (!segment || typeof segment.text !== "string" || segment.text.length > MAX_TEXT ||
+          !Number.isInteger(segment.index) || segment.index < 0 ||
           !Number.isFinite(segment.start) || !Number.isFinite(segment.dur) || segment.dur <= 0 ||
           !Array.isArray(segment.words) || !segment.words.length || segment.words.length > 256 ||
           segment.words.some((w) => !w || !Number.isFinite(w.score) || w.score < 0.12 || w.score > 1)) continue;
@@ -523,11 +600,12 @@
       byStart.set(segment.start + "\0" + end + "\0" + segment.text, candidate);
     }
     let count = 0;
-    for (const cue of cues) {
-      if (captionPieces(cue, language)) continue;
+    for (let index = 0; index < cues.length; index++) {
+      const cue = cues[index];
+      if (!cue || captionPieces(cue, language)) continue;
       const end = Number.isFinite(cue.end) ? cue.end : cue.start + cue.dur;
       const candidate = byStart.get(cue.start + "\0" + end + "\0" + cue.text);
-      if (!candidate) continue;
+      if (!candidate || candidate.index !== index) continue;
       cue.words = candidate.words.map((w) => ({ t: w.t, e: w.e, u: w.u, score: w.score }));
       cue.wordTimingSource = "audio";
       count++;
@@ -535,7 +613,13 @@
     return count;
   }
 
-  const api = Object.freeze({ tokens, timingKey, syllables, captionPieces, estimate, speakingRate, pace, localRate, align, applyAudio });
+  // Alignment results only mean something for the helper version that produced
+  // them: version 2 added the track position to every sentence and the audio
+  // fingerprint to the helper's cache key. An older record is re-run, never
+  // reused, so a stale result cannot be mistaken for a current one.
+  const AUDIO_RECORD_VERSION = 2;
+
+  const api = Object.freeze({ AUDIO_RECORD_VERSION, tokens, timingKey, syllables, captionPieces, estimate, speakingRate, pace, localRate, align, applyAudio });
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.YtdsWordTiming = api;
 })(typeof window === "object" ? window : globalThis);

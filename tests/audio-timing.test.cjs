@@ -7,7 +7,7 @@ const timing = require('../word-timing.js');
 const { mountContent } = require('./harness.cjs');
 const videoId = 'speechde001';
 const cue = { start: 0, dur: 4000, text: 'Hallo schöne Welt.', trans: '你好，美丽的世界。' };
-const segment = () => ({ start: 0, dur: 4000, text: cue.text, words: [
+const segment = () => ({ index: 0, start: 0, dur: 4000, text: cue.text, words: [
   { t: 200, e: 600, u: 'Hallo', score: .9 },
   { t: 1300, e: 1800, u: 'schöne', score: .8 },
   { t: 2600, e: 3100, u: 'Welt', score: .85 }
@@ -47,7 +47,9 @@ test('late audio follows playback, silence, pause and seek without changing tran
   const before = player.read();
   const srt = await player.exportOriginal();
   player.seekTo(1.5);
-  const reply = player.request({ type: 'applyAudioTiming', record: { videoId, sourceLang: 'de', segments: [segment()] } });
+  const reply = player.request({ type: 'applyAudioTiming', record: {
+    videoId, sourceLang: 'de', cuesKey: player.request({ type: 'audioIdentity' }).cuesKey,
+    version: 2, segments: [segment()] } });
   assert.equal(reply.count, 1);
   assert.equal(player.status().wordTiming, 'audio');
   assert.equal(player.activeWordIdx(), 1);
@@ -69,12 +71,14 @@ test('late audio follows playback, silence, pause and seek without changing tran
 
 test('audio context includes only missing timing and delayed results cannot apply after video or language changes', async () => {
   const player = await mountContent({ videoId, cues: [{ ...cue }] });
+  const track = { videoId, sourceLang: 'de', cuesKey: player.request({ type: 'audioIdentity' }).cuesKey,
+    version: 2, segments: [segment()] };
   assert.equal(player.request({ type: 'audioContext' }).cues.length, 1);
-  assert.equal(player.request({ type: 'applyAudioTiming', record: { videoId, sourceLang: 'en', segments: [segment()] } }).ok, false);
-  player.request({ type: 'applyAudioTiming', record: { videoId, sourceLang: 'de', segments: [segment()] } });
+  assert.equal(player.request({ type: 'applyAudioTiming', record: { ...track, sourceLang: 'en' } }).ok, false);
+  player.request({ type: 'applyAudioTiming', record: track });
   assert.equal(player.request({ type: 'audioContext' }).cues.length, 0);
   player.navigate('otherde0001');
-  assert.equal(player.request({ type: 'applyAudioTiming', record: { videoId, sourceLang: 'de', segments: [segment()] } }).ok, false);
+  assert.equal(player.request({ type: 'applyAudioTiming', record: track }).ok, false);
 });
 
 test('a caption track identity changes with text, boundaries and order', () => {
@@ -98,12 +102,12 @@ test('alignment results for other subtitles are refused and reported, never appl
   assert.match(identity.cuesKey, /^[0-9a-f]{8}$/);
   assert.equal(player.request({ type: 'audioContext' }).cuesKey, identity.cuesKey);
   const foreign = player.request({ type: 'applyAudioTiming',
-    record: { videoId, sourceLang: 'de', cuesKey: 'ffffffff', segments: [segment()] } });
+    record: { videoId, sourceLang: 'de', cuesKey: 'ffffffff', version: 2, segments: [segment()] } });
   assert.equal(foreign.count, 0, 'a record from another track is not applied');
   assert.equal(player.status().audioStale, true, 'the UI can tell why nothing was applied');
   assert.equal(player.status().wordTiming, 'estimated');
   const current = player.request({ type: 'applyAudioTiming',
-    record: { videoId, sourceLang: 'de', cuesKey: identity.cuesKey, segments: [segment()] } });
+    record: { videoId, sourceLang: 'de', cuesKey: identity.cuesKey, version: 2, segments: [segment()] } });
   assert.equal(current.count, 1);
   assert.equal(player.status().wordTiming, 'audio');
   assert.equal(player.status().audioStale, false, 'a matching record clears the notice');
@@ -114,6 +118,49 @@ test('alignment results for other subtitles are refused and reported, never appl
   const changed = player.request({ type: 'audioIdentity' });
   assert.equal(changed.videoId, 'otherde0001');
   assert.notEqual(changed.cuesKey, identity.cuesKey);
+});
+
+test('word times are applied only to the sentence they were measured on', async () => {
+  // Two identical sentences at different positions: text alone cannot say which
+  // one a result belongs to, so the track position decides.
+  const player = await mountContent({ videoId, cues: [{ ...cue }, { ...cue, start: 5000 }] });
+  const key = player.request({ type: 'audioIdentity' }).cuesKey;
+  const shifted = { ...segment(), index: 1, start: 5000,
+    words: segment().words.map(w => ({ ...w, t: w.t + 5000, e: w.e + 5000 })) };
+  const reply = player.request({ type: 'applyAudioTiming', record: {
+    videoId, sourceLang: 'de', cuesKey: key, version: 2, segments: [shifted] } });
+  assert.equal(reply.count, 1);
+  const missing = player.request({ type: 'audioContext' }).cues;
+  assert.equal(missing.length, 1, 'only the other sentence still needs word times');
+  assert.equal(missing[0].index, 0, 'the sentence left without times states its own position');
+  // A position that does not exist in this track is refused, not clamped.
+  const outside = player.request({ type: 'applyAudioTiming', record: {
+    videoId, sourceLang: 'de', cuesKey: key, version: 2,
+    segments: [{ ...segment(), index: 7 }] } });
+  assert.equal(outside.count, 0);
+});
+
+test('word times that arrive late replace the pace measured without them', async () => {
+  const player = await mountContent({ videoId, cues: [{ ...cue }, { ...cue, start: 8000 }] });
+  const real = player.timing;
+  let calls = 0;
+  player.timing = Object.freeze({ ...real,
+    pace(...args) { calls += 1; return real.pace(...args); } });
+  // The track is measured when it changes, not once per rendered frame.
+  player.at(8.1);
+  const first = calls;
+  player.at(8.2);
+  player.at(8.3);
+  assert.equal(calls, first, 'playback does not rescan the track for every frame');
+  assert.ok(first <= 1, 'the track is measured at most once');
+  // Word times landing on the first sentence change what the track looks like,
+  // so the sentence still playing is measured again instead of being rendered
+  // with the rate that was guessed before those times existed.
+  const key = player.request({ type: 'audioIdentity' }).cuesKey;
+  assert.equal(player.request({ type: 'applyAudioTiming', record: { videoId, sourceLang: 'de',
+    cuesKey: key, version: 2, segments: [segment()] } }).count, 1);
+  player.at(8.4);
+  assert.equal(calls, first + 1, 'real word times are measured again instead of reusing the estimate');
 });
 
 test('local cache serializes partial results and keys them by track and offset', async () => {
@@ -127,8 +174,8 @@ test('local cache serializes partial results and keys them by track and offset',
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'audio-cache.js'), 'utf8'), sandbox);
   const save = (segments, extra = {}) => new Promise(resolve => listeners[0]({ type: 'saveAudioTiming',
     record: { videoId, sourceLang: 'de', cuesKey: 'deadbeef', model: 'oliverguhr/wav2vec2-base-german-cv9',
-      version: 1, offsetMs: 0, segments, ...extra } }, {}, resolve));
-  const second = { ...segment(), start: 5000, words: segment().words.map(w => ({ ...w, t: w.t + 5000, e: w.e + 5000 })) };
+      version: 2, offsetMs: 0, segments, ...extra } }, {}, resolve));
+  const second = { ...segment(), index: 1, start: 5000, words: segment().words.map(w => ({ ...w, t: w.t + 5000, e: w.e + 5000 })) };
   await Promise.all([save([segment()]), save([second])]);
   assert.equal(saved.audioTimingCacheV1[0].segments.length, 2);
   const result = await save([{ ...second, words: [] }]);
@@ -141,7 +188,7 @@ test('local cache serializes partial results and keys them by track and offset',
   // The arrays come from the vm realm, so compare joined text, not prototypes.
   assert.equal(saved.audioTimingCacheV1.map(r => r.cuesKey).join(','), 'deadbeef,cafebabe,deadbeef');
   assert.equal(saved.audioTimingCacheV1.map(r => r.offsetMs).join(','), '0,0,60000');
-  assert.equal(saved.audioTimingCacheV1.every(r => r.version === 1 && r.model), true);
+  assert.equal(saved.audioTimingCacheV1.every(r => r.version === 2 && r.model), true);
   // An incomplete record is refused instead of being stored as a success.
   for (const extra of [{ cuesKey: '' }, { version: 0 }, { model: '' }, { offsetMs: -1 }]) {
     assert.equal((await save([segment()], extra)).ok, false);

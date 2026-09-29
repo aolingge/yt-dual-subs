@@ -30,7 +30,7 @@ os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 os.environ.setdefault("USE_TF", "0")
 
 PORT = 8765
-VERSION = 1
+VERSION = 2
 MODELS = {
     "de": ("oliverguhr/wav2vec2-base-german-cv9", "e3c2cb317c771e7fbbdfbf20be6017b8e65b232d"),
     "en": ("facebook/wav2vec2-base-960h", "main"),
@@ -38,6 +38,12 @@ MODELS = {
 MAX_BODY = 3 * 1024 * 1024
 MAX_AUDIO = 512 * 1024 * 1024
 MAX_CUES = 5000
+# Which audio a result belongs to. "video" is the public track of the video; a
+# local file carries its own fingerprint — its size and the hash of its first
+# 4 MiB — which the helper recomputes from the bytes it receives. Replacing the
+# file therefore creates a different job instead of reusing the old word times.
+AUDIO_HEAD_BYTES = 4 * 1024 * 1024
+AUDIO_ID = re.compile(r"^(video|local:\d{1,12}-[0-9a-f]{16})$")
 ROOT = Path(os.environ.get("LOCALAPPDATA", Path.home() / ".cache")) / "YT Dual Subs" / "audio-alignment"
 
 
@@ -57,18 +63,27 @@ def validate_request(data):
     if not isinstance(cues, list) or not 0 < len(cues) <= MAX_CUES:
         raise AlignmentError("invalidRequest")
     cleaned = []
+    seen = set()
     for cue in cues:
         if not isinstance(cue, dict):
             raise AlignmentError("invalidRequest")
         start, dur = cue.get("start"), cue.get("dur")
         text, tokens = cue.get("text"), cue.get("tokens")
-        if (not isinstance(start, (int, float)) or not 0 <= start <= 86_400_000
+        position = cue.get("index")
+        # Every sentence names its position in the subtitle track. The result
+        # carries it back, and the extension only applies word times to the
+        # sentence that still sits there, so a re-ordered or re-segmented track
+        # cannot receive times measured for another sentence.
+        if (not isinstance(position, int) or isinstance(position, bool) or not 0 <= position < MAX_CUES
+                or position in seen
+                or not isinstance(start, (int, float)) or not 0 <= start <= 86_400_000
                 or not isinstance(dur, (int, float)) or not 0 < dur <= 30_000
                 or not isinstance(text, str) or not 0 < len(text) <= 2000
                 or not isinstance(tokens, list) or not 0 < len(tokens) <= 256
                 or any(not isinstance(w, str) or not 0 < len(w) <= 120 or w not in text for w in tokens)):
             raise AlignmentError("invalidRequest")
-        cleaned.append({"start": start, "dur": dur, "text": text, "tokens": tokens})
+        seen.add(position)
+        cleaned.append({"index": position, "start": start, "dur": dur, "text": text, "tokens": tokens})
     priority = data.get("positionMs", 0)
     if not isinstance(priority, (int, float)) or not 0 <= priority <= 86_400_000:
         priority = 0
@@ -78,12 +93,15 @@ def validate_request(data):
     offset = data.get("offsetMs", 0)
     if not isinstance(offset, (int, float)) or isinstance(offset, bool) or not 0 <= offset <= 86_400_000:
         raise AlignmentError("invalidRequest")
+    audio_id = data.get("audioId", "video")
+    if not isinstance(audio_id, str) or not AUDIO_ID.fullmatch(audio_id):
+        raise AlignmentError("invalidRequest")
     return {"videoId": data["videoId"], "language": language, "cues": cleaned,
-            "positionMs": priority, "offsetMs": offset}
+            "positionMs": priority, "offsetMs": offset, "audioId": audio_id}
 
 
 def cache_key(data):
-    payload = {k: data[k] for k in ("videoId", "language", "cues", "offsetMs")}
+    payload = {k: data[k] for k in ("videoId", "language", "cues", "offsetMs", "audioId")}
     payload["model"] = MODELS[data["language"]]
     payload["version"] = VERSION
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -225,7 +243,8 @@ class Aligner:
             result.append({"u": word, "t": round(base + start * frame_ms, 1),
                            "e": min(cue["start"] + cue["dur"], round(base + end * frame_ms, 1)),
                            "score": round(score, 4)})
-        return {"start": cue["start"], "dur": cue["dur"], "text": cue["text"], "words": result}
+        return {"index": cue["index"], "start": cue["start"], "dur": cue["dur"],
+                "text": cue["text"], "words": result}
 
 
 def ffmpeg_path():
@@ -295,8 +314,16 @@ class Jobs:
             if cache.is_file():
                 try:
                     result = json.loads(cache.read_text(encoding="utf-8"))
-                    job.update(status="done", done=job["total"], segments=result["segments"])
-                except (ValueError, KeyError):
+                    # Only a finished run for exactly this key and this audio is a
+                    # hit. A file left by an interrupted run, an older algorithm
+                    # version or a replaced audio file carries no completion
+                    # marker (or a different identity) and is aligned instead of
+                    # being reported as done.
+                    if (result.get("complete") is True and result.get("key") == key
+                            and result.get("audioId") == data["audioId"]
+                            and isinstance(result.get("segments"), list)):
+                        job.update(status="done", done=job["total"], segments=result["segments"])
+                except (ValueError, AttributeError):
                     pass
             self.jobs[job_id] = job
             # Keep memory bounded; persistent job results remain on disk.
@@ -391,7 +418,12 @@ class Jobs:
                 self.cancelled(job)
                 cache = folder / "timings.json"
                 temporary = cache.with_suffix(".tmp")
-                encoded = json.dumps({"segments": job["segments"]}, ensure_ascii=False)
+                # The completion marker is what makes this file a reusable
+                # result. It is written in one step, so an interrupted run can
+                # never leave a file that looks finished.
+                encoded = json.dumps({"complete": True, "key": job["key"], "audioId": data["audioId"],
+                                      "total": job["total"], "segments": job["segments"]},
+                                     ensure_ascii=False)
                 temporary.write_text(encoded, encoding="utf-8")
                 try:
                     temporary.replace(cache)
@@ -431,7 +463,7 @@ class Jobs:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "YTDSAlignment/1"
+    server_version = "YTDSAlignment/2"
 
     def log_message(self, _format, *_args): pass
 
@@ -519,13 +551,26 @@ class Handler(BaseHTTPRequestHandler):
                     raise AlignmentError("busy")
                 source = job["folder"] / "uploaded.audio"
                 remaining = length
+                digest = hashlib.sha256()
+                head, written = 0, 0
                 with source.open("wb") as audio:
                     while remaining:
                         chunk = self.rfile.read(min(65536, remaining))
                         if not chunk:
                             raise AlignmentError("audioInvalid")
                         audio.write(chunk)
+                        if head < AUDIO_HEAD_BYTES:
+                            part = chunk[:AUDIO_HEAD_BYTES - head]
+                            digest.update(part)
+                            head += len(part)
+                        written += len(chunk)
                         remaining -= len(chunk)
+                # The file must be the one this job was created for. The identity
+                # the page declared is recomputed from the received bytes, so a
+                # replaced or mistyped file is refused loudly instead of being
+                # aligned and reported as if it were the right recording.
+                if job["data"]["audioId"] != f"local:{written}-{digest.hexdigest()[:16]}":
+                    raise AlignmentError("audioMismatch")
                 self.server.jobs.start(job_id, source)
             self.reply({"ok": True})
         except (ValueError, AlignmentError) as error:

@@ -251,6 +251,7 @@
   "audioBusy": { "message": "本機程式忙碌中，請停止既有分析或等待它完成。" },
   "audioInvalidRequest": { "message": "目前字幕資料無法直接分析，請嘗試較短的帶字幕影片。" },
   "audioJobLost": { "message": "本機程式已重新啟動，請重新開始分析；已完成的快取可以重用。" },
+  "audioHelperOld": { "message": "本機程式版本比目前擴充功能舊，無法產生與字幕句綁定的詞時間。請用 tools/Start-AudioAlignment.cmd 重新啟動後再試。" },
   "audioPermissionDenied": { "message": "未取得本機網站存取權限，請重新開始並允許存取 127.0.0.1。" },
   "audioFailed": { "message": "音訊分析未完成，請檢查本機程式和模型下載後重試。現有字幕仍可使用。" }
 }
