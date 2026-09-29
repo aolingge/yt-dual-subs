@@ -104,6 +104,24 @@ class AlignmentChecks(unittest.TestCase):
         # rather than being read with negative sample indices.
         self.assertIsNone(server.cue_window({"start": 0, "dur": 4000}, 5_000, 16000 * 60))
 
+    def test_adjacent_captions_share_no_audio_and_keep_video_time(self):
+        # Each caption is aligned on its own window, so a word can neither be
+        # counted twice nor be borrowed from the neighbouring chunk.
+        samples = 16000 * 2
+        first = server.cue_window({"start": 0, "dur": 1000}, 0, samples)
+        second = server.cue_window({"start": 1000, "dur": 1000}, 0, samples)
+        self.assertEqual(first, (0, 0, 16000))
+        self.assertEqual(second, (1000, 16000, 32000))
+        self.assertEqual(first[2], second[1], "the windows touch without overlapping")
+        # Frames of each window map back to that caption's own video time.
+        self.assertEqual(first[0], 0)
+        self.assertEqual(second[0], 1000)
+        # A caption running past the end of the file is clipped to the file,
+        # never widened, so its last words stay inside the audio.
+        clipped = server.cue_window({"start": 1500, "dur": 3000}, 0, samples)
+        self.assertEqual(clipped, (1500, 24000, 32000))
+        self.assertIsNone(server.cue_window({"start": 9000, "dur": 1000}, 0, samples))
+
     def test_health_reports_where_results_are_cached(self):
         with tempfile.TemporaryDirectory() as folder:
             http = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)

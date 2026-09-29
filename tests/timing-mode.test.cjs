@@ -66,3 +66,32 @@ test('the popup can see whether an analysis is running, finished or failed', asy
   p.request({ type: 'audioJobState', state: 'nonsense' });
   assert.equal(p.status().audioJob, '', 'only known states are accepted');
 });
+
+// Caption times already in the cue: the fallback an audio failure must land on.
+const timed = () => ({ start: 0, dur: 4000, text: cue.text, trans: cue.trans, words: [
+  { t: 0, u: 'Hallo' }, { t: 1300, u: 'schöne' }, { t: 2600, u: 'Welt' }] });
+
+test('a failed analysis leaves the caption timing and the translation usable', async () => {
+  const p = await mountContent({ cues: [timed()] });
+  p.at(0.2);
+  assert.equal(p.status().wordTiming, 'captions');
+  assert.deepEqual({ ...p.request({ type: 'audioJobState', state: 'failed' }) }, { ok: true, audioJob: 'failed' });
+  p.at(1.5);
+  assert.equal(p.activeWordIdx(), 1, 'the video clock still drives the highlight');
+  assert.equal(p.status().wordTiming, 'captions', 'a failure never claims audio timing');
+  const overlay = p.overlayEl();
+  assert.match(overlay.children[1].textContent, /Hallo schöne Welt/);
+  assert.match(overlay.children[0].textContent, /美丽的世界/);
+});
+
+test('the highlight follows video time at any playback rate', async () => {
+  const p = await mountContent({ cues: [timed()] });
+  p.at(0.2);
+  assert.equal(p.activeWordIdx(), 0);
+  p.video.playbackRate = 2;
+  p.at(1.5);
+  assert.equal(p.activeWordIdx(), 1, 'double speed still highlights the word at this video time');
+  p.video.playbackRate = .5;
+  p.at(2.9);
+  assert.equal(p.activeWordIdx(), 2);
+});
