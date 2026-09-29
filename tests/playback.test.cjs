@@ -140,7 +140,14 @@ test('the status snapshot describes what the page is doing', async () => {
     ok: true, version: MANIFEST_VERSION, videoId: 'sample', enabled: true,
     backend: 'tlang', targetLang: 'zh-CN', sourceLang: 'de',
     mode: 'cues', source: 'youtube', transSource: 'youtube', cueCount: 1,
-    wordTiming: 'estimated', audioStale: false, audioJob: '', pending: false, cached: false, cooldownSec: 0
+    platform: 'youtube', nocuesReason: '', nocuesDetail: '',
+    tracks: '', manualTrack: '', importName: '', importCount: 0,
+    wordTiming: 'estimated', audioStale: false, audioJob: '', pending: false, cached: false, cooldownSec: 0,
+    // These cues came from the page, which also means captions ARE present:
+    // the local recognizer must refuse to start on this video.
+    cueSource: 'page', captionAvailability: 'present',
+    recognitionState: '', recognitionMessage: '', recognitionCueCount: 0,
+    bridgeBase: '', bridgeToken: ''
   });
 
   const off = await mountContent({ cues, aligned: true, settings: { enabled: false } });

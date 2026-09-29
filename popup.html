@@ -80,6 +80,70 @@
       </div>
     </section>
 
+    <!-- ================= 哔哩哔哩（只在 B 站页面出现） ================= -->
+    <section class="card" id="biliCard" hidden>
+      <h2 class="card-title" data-i18n="bbSection">哔哩哔哩</h2>
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="bbSiteHint">上方德语译文、下方中文原文。不支持直播、番剧和手机网页版。</span>
+      </div>
+
+      <div class="row">
+        <label for="bbTrack" data-i18n="bbTrackLabel">中文字幕轨</label>
+        <select id="bbTrack"></select>
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="bbTrackHint">该选择只对当前视频的当前分 P 生效。</span>
+        </div>
+      </div>
+
+      <div class="row">
+        <label data-i18n="bbImportLabel">本地字幕文件</label>
+        <div class="study-actions">
+          <button type="button" id="bbImport" data-i18n="bbImportPick">导入 SRT 文件</button>
+          <button type="button" id="bbClear" data-i18n="bbImportClear">解除绑定</button>
+        </div>
+        <input type="file" id="bbFile" accept=".srt,text/plain" hidden>
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="bbImportHint">只绑定到当前视频和分 P，保存在本机，不上传文件。翻译时会把字幕文本发送给翻译服务。</span>
+        </div>
+      </div>
+
+      <p class="status" id="bbStatus" role="status" aria-live="polite" hidden></p>
+    </section>
+
+    <!-- ============ 本机语音识别（没有字幕的视频） ============ -->
+    <section class="card" id="recogCard">
+      <h2 class="card-title" data-i18n="recogSection">本机语音识别</h2>
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="recogHint">给没有字幕的视频生成字幕：音频只发送到本机运行的 Deutsch Overlay，不上传。</span>
+      </div>
+
+      <div class="row">
+        <label for="bridgeBase" data-i18n="recogBaseLabel">本机服务地址</label>
+        <input type="text" id="bridgeBase" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:8766">
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="recogBaseHint">在桌面端运行 deutsch-overlay-bridge 后，把命令提示符里显示的地址和令牌填到下面。</span>
+        </div>
+      </div>
+
+      <div class="row">
+        <label for="bridgeToken" data-i18n="recogTokenLabel">本机服务令牌</label>
+        <input type="text" id="bridgeToken" spellcheck="false" autocomplete="off">
+      </div>
+
+      <div class="row">
+        <div class="study-actions">
+          <button type="button" id="recogTest" data-i18n="recogTest">检查连接</button>
+          <button type="button" id="recogStart" disabled data-i18n="recogStart">无字幕，启用语音识别</button>
+          <button type="button" id="recogStop" hidden data-i18n="recogStop">停止识别</button>
+        </div>
+        <div class="pos-foot">
+          <span class="pos-hint" data-i18n="recogCaptureHint">只在确认当前视频没有字幕轨后可用。识别期间视频照常有声。</span>
+        </div>
+      </div>
+
+      <p class="status" id="recogStatus" role="status" aria-live="polite" hidden></p>
+    </section>
+
     <!-- ============================ VIDEO STUDY ============================ -->
     <section class="card study-workspace" aria-labelledby="studyWorkspaceTitle">
       <div class="study-heading">
@@ -414,6 +478,7 @@
     <p class="ver">v<span id="version">3.9.1</span></p>
   </footer>
 
+  <script src="site.js"></script>
   <script src="settings.js"></script>
   <script src="popup.js"></script>
   <script src="study.js"></script>

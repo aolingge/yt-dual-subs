@@ -47,7 +47,18 @@ const DEFAULTS = {
   transBg: "#080808",
   transBgOpacity: 0.6,
   transStroke: "#000000",
-  transStrokeOpacity: 0
+  transStrokeOpacity: 0,
+  // Bilibili only: the hand-picked caption track ("<videoKey>|<lan>", empty =
+  // automatic) and the last track list the page reported (JSON, for the
+  // manual switch). They are stored with the other settings so the choice
+  // survives a reload, and are reset per video by the reader.
+  bbTrackId: "",
+  bbTracks: "",
+  // The local Deutsch Overlay bridge. Empty base URL means "not configured":
+  // the recognition controls stay disabled rather than probing a port that is
+  // probably not there.
+  bridgeBase: "",
+  bridgeToken: ""
 };
 
 // Font key -> font-family stack (shared with content.js render).
@@ -97,6 +108,18 @@ const $ = (id) => document.getElementById(id);
 let state = { ...DEFAULTS };
 let activeLine = "trans";        // which line the tab editor is bound to
 let exportVariant = "bi";        // SRT export content: "bi" | "orig" | "trans" (local, not stored)
+
+// The popup is opened over some tab, and its settings belong to THAT tab's site:
+// Bilibili keeps its own target language and line order. This document lives on
+// the extension origin, where site.js's own host detection says nothing, so the
+// adapter is chosen from the active tab's URL instead.
+let site = globalThis.YtdsSite ? YtdsSite.forPlatform("youtube") : null;
+let lastStatus = null;
+let biliNotice = '';   // one-off line in the Bilibili card, replaced by the next poll
+const toStore = (patch) => (site ? site.toStore(patch) : patch);
+const fromStore = (record) => (site ? site.fromStore(record) : record);
+const platformOfUrl = (url) => (globalThis.YtdsSite && YtdsSite.platformOfUrl
+  ? YtdsSite.platformOfUrl(url) : "youtube");
 
 // ---- i18n ----------------------------------------------------------------
 // Safe wrapper: returns the localized message, or the fallback if the key is
@@ -176,7 +199,7 @@ function setKey(key, val) {
 async function persistSettings(patch) {
   const message = $("settingsMsg");
   try {
-    await YtdsSettings.set(patch);
+    await YtdsSettings.set(toStore(patch));
     if (message) message.hidden = true;
     return true;
   } catch (_e) {
@@ -292,14 +315,23 @@ function sendToTab(tabId, msg) {
 // translation line is explainable instead of mysterious.
 function statusText(s) {
   if (!s) {
-    return t("statusNoReply",
-      "没有收到页面状态：如果这是 YouTube 视频页，请刷新一次页面。");
+    return t("statusNoReplyAny",
+      "没有收到页面状态：如果这是 YouTube 或 B 站视频页，请刷新一次页面。");
   }
+  const bili = s.platform === "bilibili";
   if (!s.enabled) return t("statusOff", "扩展已关闭，字幕不会显示。");
   const parts = [];
-  if (s.mode === "cues") parts.push(t("statusCues", "字幕源：YouTube 字幕轨"));
+  if (s.mode === "cues") {
+    parts.push(bili
+      ? t("statusCuesBili", "字幕源：B 站中文字幕轨")
+      : t("statusCues", "字幕源：YouTube 字幕轨"));
+  }
   else if (s.mode === "scrape") parts.push(t("statusScrape", "字幕源：画面字幕（即时显示／字幕轨加载中）"));
-  else parts.push(t("statusIdle", "等待视频提供字幕；请检查 YouTube 的 CC 开关和字幕轨"));
+  else {
+    parts.push(bili
+      ? t("statusIdleBili", "等待 B 站中文字幕轨；可在下方切换字幕轨或导入 SRT")
+      : t("statusIdle", "等待视频提供字幕；请检查 YouTube 的 CC 开关和字幕轨"));
+  }
   if (s.cueCount) parts.push(s.cueCount + " " + t("statusLines", "句"));
   if (s.mode === "cues") {
     const lang = String(s.sourceLang || "auto");
@@ -316,14 +348,264 @@ function statusText(s) {
   return parts.join(" · ");
 }
 
+// ---- Bilibili panel ------------------------------------------------------
+// Only shown when the active tab is a Bilibili video page. It carries the two
+// things that are specific to that site: which Chinese caption track to read
+// (bound to THIS video and part), and why the overlay currently has no caption.
+const BB_REASON_KEYS = {
+  unsupported_page: "bbUnsupportedPage",
+  loading: "bbLoading",
+  need_login: "bbNeedLogin",
+  no_track: "bbNoTrack",
+  not_chinese: "bbNotChinese",
+  fetch_failed: "bbFetchFailed",
+  import_missing: "bbImportMissing"
+};
+
+function parseTracks(json) {
+  try {
+    const list = JSON.parse(json || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch (_e) { return []; }
+}
+
+function renderBiliCard(s) {
+  const card = $("biliCard");
+  if (!card) return;
+  const on = !!s && s.platform === "bilibili";
+  card.hidden = !on;
+  if (!on) return;
+
+  const select = $("bbTrack");
+  if (select) {
+    const current = String(s.manualTrack || "");
+    const wanted = [[
+      "", t("bbTrackAuto", "自动（优先人工中文轨）")
+    ]].concat(parseTracks(s.tracks).map((tr) => {
+      const doc = String(tr.doc || tr.lan || "");
+      return [String(tr.lan || ""), tr.ai ? doc + " · " + t("bbTrackAiTag", "自动生成") : doc];
+    }));
+    // Rebuild only when the list or the selection actually changed: the popup
+    // polls every 1.5 s and must not fight the user's open dropdown.
+    const signature = JSON.stringify(wanted) + "|" + current;
+    if (select.dataset.sig !== signature) {
+      select.dataset.sig = signature;
+      select.textContent = "";
+      for (const [value, label] of wanted) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        select.appendChild(option);
+      }
+      select.value = wanted.some(([value]) => value === current) ? current : "";
+    }
+  }
+
+  const el = $("bbStatus");
+  if (el) {
+    const bound = String(s.importName || "");
+    const reason = bound ? "" : String(s.nocuesReason || "");
+    const key = BB_REASON_KEYS[reason];
+    // Which source is on screen wins over why the page has nothing: text that
+    // came from the recognizer (or a file) is the reason there are subtitles at
+    // all, and calling it the uploader's captions would be a lie.
+    let text = "";
+    if (s.cueSource === "recognized") {
+      text = t("bbRecognizedActive", "字幕来自本机语音识别") +
+        (s.recognitionCueCount ? "（" + s.recognitionCueCount + " " + t("statusLines", "句") + "）" : "");
+    } else if (bound) {
+      text = t("bbImportActive", "字幕来自导入的文件") + "：" + bound +
+        (s.importCount ? "（" + s.importCount + " " + t("statusLines", "句") + "）" : "");
+    } else if (key) {
+      text = t(key, "");
+    }
+    const detail = reason === "fetch_failed" ? String(s.nocuesDetail || "") : "";
+    const line = [text, detail].filter(Boolean).join("　");
+    if (el.textContent !== line) el.textContent = line;
+    el.hidden = !line;
+  }
+
+  const clear = $("bbClear");
+  if (clear) clear.disabled = !String(s.importName || "").length;
+}
+
+// The file is read in the popup and handed to the content script as text: the
+// extension never uploads it, and the page never sees a File object.
+async function onImportFile(file) {
+  if (!file) return;
+  const tab = await getActiveTab();
+  if (!tab || tab.id == null) return;
+  let text = "";
+  try { text = await file.text(); } catch (_e) { text = ""; }
+  if (!text) { setBiliNotice(t("bbImportUnreadable", "无法读取该文件。")); return; }
+  const resp = await sendToTab(tab.id, { type: "importSrt", name: file.name, text });
+  if (!resp || !resp.ok) {
+    setBiliNotice(t("bbImportFailed", "导入失败：") + String((resp && resp.reason) || "unknown"));
+    return;
+  }
+  setBiliNotice(t("bbImportDone", "已导入") + "：" + resp.name + "（" + resp.count + " " +
+    t("statusLines", "句") + "）");
+  refreshStatus();
+}
+
+async function onClearImport() {
+  const tab = await getActiveTab();
+  if (!tab || tab.id == null) return;
+  await sendToTab(tab.id, { type: "clearSrt" });
+  setBiliNotice(t("bbImportCleared", "已解除本地字幕绑定。"));
+  refreshStatus();
+}
+
+// A one-off message in the Bilibili card's status line, replaced by the next
+// poll on the next status refresh.
+function setBiliNotice(text) {
+  const el = $("bbStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = !text;
+  biliNotice = text;
+  setTimeout(() => { if (biliNotice === text) { biliNotice = ""; refreshStatus(); } }, 4000);
+}
+
+// The pick is stored as "<videoKey>|<lan>", so a choice made on one part can
+// never be applied to another part or another video.
+function onBiliTrackChange() {
+  const select = $("bbTrack");
+  const videoId = lastStatus && lastStatus.videoId;
+  if (!select || !videoId) return;
+  const value = select.value ? videoId + "|" + select.value : "";
+  if (String(state.bbTrackId || "") === value) return;
+  state.bbTrackId = value;
+  persistSettings({ bbTrackId: value });
+}
+
+// ---- on-device recognition card ------------------------------------------
+// The button is the user gesture the browser requires before a tab may be
+// captured, so it is never enabled by anything except this card, and only when
+// the page itself reported that the video has NO usable caption track. Every
+// other answer — captions found, captions unknown, reader said nothing — leaves
+// it disabled with the reason spelled out, because starting recognition over an
+// existing caption set would show the user two different subtitles at once.
+function recogGateText(s) {
+  if (!s) return t("recogNoPage", "没有收到页面状态：请刷新视频页面。");
+  if (s.captionAvailability === "absent") return "";
+  if (s.captionAvailability === "present") {
+    return t("recogHasCaptions", "该视频已有字幕轨，不需要语音识别。");
+  }
+  return t("recogUnknownCaptions", "还没有确认该视频有没有字幕轨，请先播放几秒或切换一次字幕轨。");
+}
+
+function renderRecognizerCard(s) {
+  const base = $("bridgeBase");
+  const token = $("bridgeToken");
+  const state = s && s.recognitionState ? String(s.recognitionState) : "";
+  const running = state === "running" || state === "starting";
+  const configured = !!String(state.bridgeBase || "").trim() && !!String(state.bridgeToken || "").trim();
+
+  if (base && base.value !== String(state.bridgeBase || "")) base.value = String(state.bridgeBase || "");
+  if (token && token.value !== String(state.bridgeToken || "")) token.value = String(state.bridgeToken || "");
+
+  const start = $("recogStart");
+  const stop = $("recogStop");
+  const test = $("recogTest");
+  const gate = recogGateText(s);
+  if (start) {
+    start.hidden = running;
+    start.disabled = !configured || !gate;
+  }
+  if (stop) stop.hidden = !running;
+  if (test) test.disabled = !configured;
+
+  const el = $("recogStatus");
+  if (el) {
+    const parts = [];
+    if (s && s.recognitionMessage) parts.push(String(s.recognitionMessage));
+    else if (gate) parts.push(gate);
+    else if (running) parts.push(t("recogRunning", "正在识别当前标签页的音频…"));
+    else if (state === "failed") parts.push(t("recogFailed", "语音识别失败。"));
+    else if (!configured) parts.push(t("recogNotConfigured", "先填写本机服务地址和令牌。"));
+    else parts.push(t("recogReady", "可以开始：该视频没有字幕轨。"));
+    const line = parts.filter(Boolean).join("　");
+    if (el.textContent !== line) el.textContent = line;
+    el.hidden = !line;
+  }
+}
+
+// One connection probe, on demand: a green line here means the machine is
+// reachable and the token is right, which is the only thing that makes the
+// recognition button meaningful.
+async function onRecogTest() {
+  const el = $("recogStatus");
+  if (el) { el.textContent = t("recogTesting", "正在检查本机服务…"); el.hidden = false; }
+  const resp = await sendToBackground({ type: "recogHealth" });
+  if (!el) return;
+  if (resp && resp.ok) {
+    el.textContent = t("recogHealthOk", "已连接本机服务") +
+      (resp.engine ? "（" + resp.engine + "）" : "") +
+      (resp.languages && resp.languages.length ? " · " + resp.languages.join("/") : "");
+  } else {
+    el.textContent = t("recogHealthFail", "连接失败：") +
+      String((resp && (resp.message || resp.code)) || "unreachable");
+  }
+  el.hidden = false;
+}
+
+async function onRecogStart() {
+  const start = $("recogStart");
+  if (start) start.disabled = true;
+  const tab = await getActiveTab();
+  if (!tab || tab.id == null) return;
+  const resp = await sendToBackground({ type: "recogStart", tabId: tab.id });
+  if (!resp || !resp.ok) {
+    const el = $("recogStatus");
+    if (el) {
+      el.textContent = t("recogStartFail", "无法开始语音识别：") +
+        String((resp && (resp.message || resp.reason || resp.code)) || "failed");
+      el.hidden = false;
+    }
+  }
+  refreshStatus();
+}
+
+async function onRecogStop() {
+  await sendToBackground({ type: "recogStop" });
+  refreshStatus();
+}
+
+function onBridgeFieldChange() {
+  const patch = {
+    bridgeBase: String($("bridgeBase")?.value || "").trim(),
+    bridgeToken: String($("bridgeToken")?.value || "").trim()
+  };
+  if (state.bridgeBase === patch.bridgeBase && state.bridgeToken === patch.bridgeToken) return;
+  state.bridgeBase = patch.bridgeBase;
+  state.bridgeToken = patch.bridgeToken;
+  persistSettings(patch);
+  refreshStatus();
+}
+
+function sendToBackground(msg) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(msg, (resp) => {
+        if (chrome.runtime.lastError) { resolve(null); return; }
+        resolve(resp);
+      });
+    } catch (_e) { resolve(null); }
+  });
+}
+
 async function refreshStatus() {
   const el = $("statusLine");
   if (!el) return;
   const tab = await getActiveTab();
   const resp = (tab && tab.id != null)
     ? await sendToTab(tab.id, { type: "status" }) : null;
+  lastStatus = resp;
   el.textContent = statusText(resp);
   el.hidden = false;
+  renderBiliCard(resp);
+  renderRecognizerCard(resp);
   const timing = $("karaokeStatus");
   const labels = {
     captions: t("karaokeStatusCaptions", "跟读：使用原字幕词时间"),
@@ -736,21 +1018,54 @@ function showVersion() {
 
 // ---- boot ----------------------------------------------------------------
 YtdsSettings.onChanged((changes, area) => {
-  if (area !== "sync" || !("overlayWidthPct" in changes)) return;
-  state.overlayWidthPct = changes.overlayWidthPct.newValue || 0;
+  if (area !== "sync") return;
+  const logical = fromStore(changes);
+  if (!("overlayWidthPct" in logical)) return;
+  state.overlayWidthPct = logical.overlayWidthPct.newValue || 0;
   paintWidthControl(); paintPreview();
 });
 applyI18n();                       // localize static markup before first paint
-YtdsSettings.get(DEFAULTS, (got) => {
-  state = { ...DEFAULTS, ...got };
-  // migrate legacy global bgOpacity onto per-line defaults
-  if (typeof got.bgOpacity === "number") {
-    if (typeof got.origBgOpacity !== "number") state.origBgOpacity = got.bgOpacity;
-    if (typeof got.transBgOpacity !== "number") state.transBgOpacity = got.bgOpacity;
-  }
-  showVersion();
-  bindUI();
-  wire();
-  fillShortcuts();           // show the keys the browser actually assigned
-  startStatus();
-});
+(function boot() {
+  // Settings are read and written for the site the user is actually looking at,
+  // so changing a Bilibili video to German can never rewrite the YouTube choice.
+  getActiveTab().then((tab) => {
+    site = YtdsSite.forPlatform(platformOfUrl(tab && tab.url));
+    YtdsSettings.get(toStore({ ...DEFAULTS, ...site.siteDefaults() }), (got) => {
+      const stored = fromStore(got);
+      state = { ...DEFAULTS, ...site.siteDefaults(), ...stored };
+      // migrate legacy global bgOpacity onto per-line defaults
+      if (typeof stored.bgOpacity === "number") {
+        if (typeof stored.origBgOpacity !== "number") state.origBgOpacity = stored.bgOpacity;
+        if (typeof stored.transBgOpacity !== "number") state.transBgOpacity = stored.bgOpacity;
+      }
+      showVersion();
+      bindUI();
+      wire();
+      fillShortcuts();           // show the keys the browser actually assigned
+      const track = $("bbTrack");
+      if (track) track.addEventListener("change", onBiliTrackChange);
+      const importBtn = $("bbImport");
+      const fileInput = $("bbFile");
+      const clearBtn = $("bbClear");
+      if (importBtn && fileInput) {
+        importBtn.addEventListener("click", () => { fileInput.value = ""; fileInput.click(); });
+        fileInput.addEventListener("change", () => {
+          const picked = fileInput.files && fileInput.files[0];
+          if (picked) onImportFile(picked);
+        });
+      }
+      if (clearBtn) clearBtn.addEventListener("click", onClearImport);
+      const recogStart = $("recogStart");
+      const recogStop = $("recogStop");
+      const recogTest = $("recogTest");
+      if (recogStart) recogStart.addEventListener("click", onRecogStart);
+      if (recogStop) recogStop.addEventListener("click", onRecogStop);
+      if (recogTest) recogTest.addEventListener("click", onRecogTest);
+      for (const id of ["bridgeBase", "bridgeToken"]) {
+        const field = $(id);
+        if (field) field.addEventListener("change", onBridgeFieldChange);
+      }
+      startStatus();
+    });
+  });
+})();

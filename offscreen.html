@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>YT Dual Subs — tab audio capture</title>
+  </head>
+  <body>
+    <!--
+      This page has no UI and is never shown. It exists because captured audio
+      needs a document that outlives the popup: an AudioContext, an AudioWorklet
+      and the audio graph cannot live in the service worker, and a graph hosted
+      by the popup would stop the moment the popup closes.
+    -->
+    <script src="bridge-client.js"></script>
+    <script src="media-clock.js"></script>
+    <script src="recognizer-stream.js"></script>
+    <script src="offscreen.js"></script>
+  </body>
+</html>

@@ -1,9 +1,15 @@
 /* content.css — overlay + native caption suppression */
 
-/* When the extension is active, visually hide YouTube's own caption layer.
-   We keep it in the DOM (display stays) so we can still read its text. */
+/* When the extension is active, visually hide the site's own caption layer.
+   We keep it in the DOM (display stays) so we can still read its text.
+   On Bilibili the native layer is .bpx-player-subtitle-wrap (verified in the
+   player bundle). It is only hidden while .ytds-rendering is set, which
+   content.js toggles on solely when the overlay owns a track AND has text —
+   so switching the extension off, or a failed read, restores it by itself.
+   Text burned into the picture is not part of this layer and is never touched. */
 html.ytds-active.ytds-rendering .ytp-caption-window-container,
-html.ytds-active.ytds-rendering .caption-window {
+html.ytds-active.ytds-rendering .caption-window,
+html.ytds-active.ytds-rendering .bpx-player-subtitle-wrap {
   opacity: 0 !important;
   pointer-events: none !important;
 }
@@ -95,10 +101,12 @@ html.ytds-active.ytds-rendering .caption-window {
 .ytds-resize-right { right: 0; }
 #movie_player:not(.ytp-autohide):hover #ytds-overlay .ytds-resize-handle,
 .html5-video-player:not(.ytp-autohide):hover #ytds-overlay .ytds-resize-handle,
+.bpx-player-container:not([data-ctrl-hidden="true"]):hover #ytds-overlay .ytds-resize-handle,
 #ytds-overlay.ytds-resizing .ytds-resize-handle,
 .ytds-resize-handle:focus-visible { opacity: .95; }
 #movie_player:not(.ytp-autohide):hover #ytds-overlay,
 .html5-video-player:not(.ytp-autohide):hover #ytds-overlay,
+.bpx-player-container:not([data-ctrl-hidden="true"]):hover #ytds-overlay,
 #ytds-overlay.ytds-resizing { outline: 1px dashed rgba(255, 255, 255, .25); outline-offset: 2px; }
 .ytds-resize-handle:focus-visible { outline: 2px solid #3ea6ff; }
 
@@ -200,6 +208,7 @@ html.ytds-active.ytds-rendering .caption-window {
    cut off mid-drag if the controls happen to hide. */
 #movie_player:not(.ytp-autohide):hover #ytds-overlay .ytds-handle,
 .html5-video-player:not(.ytp-autohide):hover #ytds-overlay .ytds-handle,
+.bpx-player-container:not([data-ctrl-hidden="true"]):hover #ytds-overlay .ytds-handle,
 .ytds-handle.ytds-dragging {
   opacity: .9;
 }
@@ -244,3 +253,49 @@ html.ytds-active.ytds-rendering .caption-window {
 .ytds-karaoke-partial .ytds-w-est {
   border-bottom: 1px dashed currentColor;
 }
+
+/* ---- Bilibili ---------------------------------------------------------- */
+/* The bpx player's control-bar button group is built by a lazily loaded chunk
+   and its class names could not be verified, so the quick toggle is NOT put
+   inside .bpx-player-control-wrap: appending a block child there could change
+   the bar's own layout and disturb the danmaku switch or the progress bar.
+   It is attached to .bpx-player-container instead — verified present and
+   already a positioning context — and placed by CSS in the video's top-right
+   corner, which is empty in the normal and fullscreen layouts. It therefore
+   cannot overlap or steal clicks from any native control.
+   Visibility follows the player's own control state: the container carries
+   data-ctrl-hidden="true" exactly while the controls are auto-hidden. */
+.bpx-player-container .ytds-toggle-bili {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 76;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(8, 8, 8, 0.55);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.bpx-player-container:not([data-ctrl-hidden="true"]):hover .ytds-toggle-bili,
+.ytds-toggle-bili:focus-visible { opacity: 0.95; }
+.bpx-player-container .ytds-toggle-bili:hover { background: rgba(20, 20, 20, 0.85); }
+
+/* The status line explains WHY no subtitle is showing (no track / needs login
+   / read failed / loading). It is deliberately plain: it is an explanation,
+   not a subtitle, so it takes the original line's font but not its colour. */
+#ytds-overlay .ytds-status {
+  display: none;
+  max-width: 100%;
+  font-weight: 500;
+  font-size: 13px;
+  line-height: 1.4;
+  color: #e7e7e7;
+  background: rgba(8, 8, 8, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+#ytds-overlay .ytds-status.ytds-status-on { display: inline-block; }
+#ytds-overlay.ytds-empty .ytds-status { display: none; }

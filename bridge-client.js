@@ -329,8 +329,11 @@
       const existing = byId.get(key);
       if (existing) {
         // Keep the newer revision; drop a stale one rather than letting a late
-        // answer flicker the line back to its untranslated text.
-        if ((existing.revision || 0) > (cue.revision || 0)) continue;
+        // answer flicker the line back to its untranslated text. The same
+        // revision is not news either: re-reading a segment the overlay is
+        // already showing must not make the line repaint or the poller keep
+        // asking for something that will never change.
+        if ((existing.revision || 0) >= (cue.revision || 0)) continue;
         const merged = Object.assign({}, existing, cue);
         if (!cue.trans && existing.trans) {
           // A revision that only carries the original must not erase a

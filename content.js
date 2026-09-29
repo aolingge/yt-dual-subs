@@ -51,8 +51,11 @@
   }
 
   // Storage writes must never throw: several run from click handlers and timers.
+  // patch is in LOGICAL setting names; site.js maps the per-site ones
+  // (Bilibili's target language and line order) onto their own storage keys so
+  // the two sites can never overwrite each other's choice.
   function saveSettings(patch) {
-    YtdsSettings.set(patch).catch(() => { if (!extAlive()) extGone = true; });
+    YtdsSettings.set(toStore(patch)).catch(() => { if (!extAlive()) extGone = true; });
   }
 
   // Background round-trips must never throw either. Returns false when the
@@ -113,8 +116,30 @@
     transBg: "#080808",
     transBgOpacity: 0.6,
     transStroke: "#000000",
-    transStrokeOpacity: 0
+    transStrokeOpacity: 0,
+    // Bilibili only: the caption track the user picked by hand, remembered as
+    // "<videoKey>|<lan>" so a choice made on one video is never applied to
+    // another (the video key carries the part number).
+    bbTrackId: "",
+    // Bilibili only: the last track list the reader reported, as JSON, so the
+    // popup can offer a manual switch without asking the page again.
+    bbTracks: "",
+    // The local Deutsch Overlay bridge (speech recognition), if the user runs
+    // one. Both are needed: the base URL points at the machine, the token is
+    // the credential in the file the bridge wrote at startup.
+    bridgeBase: "",
+    bridgeToken: ""
   };
+
+  // The small platform adapter (site.js). Everything that differs between
+  // YouTube and Bilibili lives there; content.js itself stays platform-neutral.
+  const SITE = globalThis.YtdsSite || null;
+  const SRT = globalThis.YtdsSrt || null;
+  // Per-site defaults. Bilibili's job is Chinese -> German with the translation
+  // above the original, so it must not inherit YouTube's own defaults.
+  const SITE_DEFAULTS = { ...DEFAULTS, ...(SITE ? SITE.siteDefaults() : {}) };
+  const toStore = (patch) => (SITE ? SITE.toStore(patch) : patch);
+  const fromStore = (record) => (SITE ? SITE.fromStore(record) : record);
 
   // Font key -> font-family stack (shared with popup preview).
   const FONT_STACKS = {
@@ -173,12 +198,13 @@
     return Math.max(2, Math.min(98, n));
   }
 
-  let settings = { ...DEFAULTS };
+  let settings = { ...SITE_DEFAULTS };
 
   // overlay
   let overlay = null;
   let origEl = null;
   let transEl = null;
+  let statusEl = null;        // "why there is no caption" line (Bilibili)
   let handleEl = null;
   let resizeHandles = [];
   let resizeGesture = null;
@@ -277,24 +303,120 @@
   let fallbackTranslation = "";
   const DEBOUNCE_MS = 120;
 
+  // ---- recognized captions (local speech recognition) ----------------------
+  // Cues that did NOT come from the page and did NOT come from an imported
+  // file. They are never a second subtitle track beside the page's own: while
+  // they are showing, they own the overlay, and the moment the page grows a
+  // real caption track the call is handed back instead of stacking two sets.
+  const CUE_SOURCE_PAGE = "page";
+  const CUE_SOURCE_IMPORT = "import";
+  const CUE_SOURCE_RECOGNIZED = "recognized";
+  let cueSource = CUE_SOURCE_PAGE;
+  // Live recognition state, reported to the popup. "" = not running.
+  let recogState = "";          // "" | "starting" | "running" | "stopping" | "failed"
+  let recogMessage = "";        // human-readable reason, shown next to the button
+  let recogCueCount = 0;
+  let recognizedNoticeTimer = null;
+  // Capturing the tab for recognition needs to know where the video is, and
+  // this page is the only place that knows. The reporter runs only while a
+  // session is live; `video.currentTime` is the authority, never a clock here.
+  let mediaReportTimer = null;
+  // Why capture may not start. "absent" is the only value that allows it:
+  // "present" means the page has a usable caption track and recognition would
+  // be a second, worse copy of it; "unknown" means nobody could prove there is
+  // none, which is treated exactly as strictly as "present".
+  const CAPTIONS_PRESENT = "present";
+  const CAPTIONS_ABSENT = "absent";
+  const CAPTIONS_UNKNOWN = "unknown";
+
   // bookkeeping
   let currentVideoId = videoIdFromLocation();
   let nocuesFallback = false;   // true once we've committed to scrape mode
+  // Why there is no usable caption track. Empty means "nothing to report" —
+  // notably on YouTube, whose own reader never reports a reason, so its
+  // behaviour is unchanged. A reported reason is shown to the user instead of
+  // a caption area that silently stays blank forever.
+  let nocuesReason = "";
+  let nocuesReasonText = "";
   let configNonce = 0;          // monotonic; echoed by inject.js to reject stale replies
 
   // export (SRT download) bookkeeping
   let exportSeq = 0;                  // correlation id for export-request round-trips
   const exportWaiters = new Map();   // exportId -> { resolve, timer }
 
-  // ---- settings ------------------------------------------------------------
+  // ---- the no-caption gate ------------------------------------------------
+  // Speech recognition is allowed ONLY when this says "absent". Everything else
+  // — a track list that came back, a track that failed to load, a page whose
+  // reader never reported anything, an extension that does not know this site —
+  // is deliberately not good enough, because starting capture over an existing
+  // caption set produces a second, worse copy of subtitles the user already has.
+  function captionAvailabilityState() {
+    const tracks = parseTrackList(settings.bbTracks);
+    if (tracks.length) return CAPTIONS_PRESENT;
+    // The Bilibili reader only ever reports a reason when the video key has
+    // already been resolved, so a foreign part's verdict can never leak here.
+    if (nocuesReason === "no_track" || nocuesReason === "not_chinese") return CAPTIONS_ABSENT;
+    if (cueList && cueList.length) return CAPTIONS_PRESENT;
+    if (displayCueList && displayCueList.length) return CAPTIONS_PRESENT;
+    if (cueSource === CUE_SOURCE_RECOGNIZED && recogCueCount) return CAPTIONS_PRESENT;
+    return CAPTIONS_UNKNOWN;
+  }
+
+  function parseTrackList(json) {
+    try {
+      const list = JSON.parse(json || "[]");
+      return Array.isArray(list) ? list : [];
+    } catch (_e) { return []; }
+  }
+
+  // The playback facts recognition needs, taken from the element that owns
+  // media time. Nothing here comes from a clock: currentTime is the authority,
+  // and a caller that cannot read it is told so instead of being guessed at.
+  function recognitionContext() {
+    const video = getVideo();
+    const videoKey = currentVideoId || "";
+    // The part number travels inside the video key ("BV...#p2"), so the bridge
+    // can refuse to reuse one part's captions for another.
+    const partMatch = /#p(\d+)/.exec(videoKey);
+    return {
+      platform: SITE ? SITE.platform : "youtube",
+      videoId: videoKey,
+      part: partMatch ? partMatch[1] : "",
+      captionAvailability: captionAvailabilityState(),
+      tracks: parseTrackList(settings.bbTracks),
+      sourceLanguage: sourceLanguageForRecognition(),
+      currentTimeMs: video ? Math.round(video.currentTime * 1000) : null,
+      playbackRate: video ? Number(video.playbackRate) || 1 : 1,
+      paused: video ? !!video.paused : true,
+      durationMs: video && isFinite(video.duration) ? Math.round(video.duration * 1000) : null,
+      title: document.title || "",
+      url: location.href,
+      state: recogState,
+      message: recogMessage,
+      cueCount: recogCueCount
+    };
+  }
+
+  // Chinese source for a Chinese video: the model is told what it is hearing so
+  // the German translation runs in the right direction. Anything else is left
+  // on "auto" rather than guessed from the page's own settings.
+  function sourceLanguageForRecognition() {
+    if (SITE && SITE.isBilibili) return "zh";
+    const lang = String(cueSourceLang || "").toLowerCase();
+    if (lang.startsWith("zh")) return "zh";
+    if (lang.startsWith("en")) return "en";
+    if (lang.startsWith("de")) return "de";
+    return "auto";
+  }
+
   function loadSettings() {
     return new Promise((resolve) => {
       // A dead context throws synchronously here (extension reloaded with this
       // page open); fall back to DEFAULTS rather than rejecting the boot chain.
       if (!extAlive()) { resolve(); return; }
-      const apply = (got) => {
-        const { fontSizeRepair20260926, ...saved } = got;
-        settings = { ...DEFAULTS, ...saved };
+      const apply = (stored) => {
+        const { fontSizeRepair20260926, ...saved } = fromStore(stored);
+        settings = { ...SITE_DEFAULTS, ...saved };
         // Existing installations may have an enlarged 44px subtitle setting.
         // Repair it once; later changes through the popup remain the user's choice.
         if (!fontSizeRepair20260926) {
@@ -311,14 +433,14 @@
         }
         // migrate legacy global bgOpacity -> per-line bg opacities if present
         // and the per-line keys were never set.
-        if (typeof got.bgOpacity === "number") {
-          if (typeof got.origBgOpacity !== "number") settings.origBgOpacity = got.bgOpacity;
-          if (typeof got.transBgOpacity !== "number") settings.transBgOpacity = got.bgOpacity;
+        if (typeof stored.bgOpacity === "number") {
+          if (typeof stored.origBgOpacity !== "number") settings.origBgOpacity = stored.bgOpacity;
+          if (typeof stored.transBgOpacity !== "number") settings.transBgOpacity = stored.bgOpacity;
         }
         resolve();
       };
       try {
-        YtdsSettings.get({ ...DEFAULTS, fontSizeRepair20260926: false }, apply);
+        YtdsSettings.get(toStore({ ...SITE_DEFAULTS, fontSizeRepair20260926: false }), apply);
       } catch (_e) {
         extGone = true;
         resolve();                      // keep DEFAULTS; the page still renders
@@ -331,8 +453,12 @@
   // positive set is the single source of truth for the re-cue decision.
   const RECUE_KEYS = new Set(["backend", "targetLang"]);
 
-  YtdsSettings.onChanged((changes, area) => {
+  YtdsSettings.onChanged((storedChanges, area) => {
     if (area !== "sync") return;
+    // Storage keys -> logical settings. A key belonging to the OTHER site
+    // (YouTube's targetLang while we are on Bilibili) is dropped here, so it
+    // can never masquerade as a change to this site's setting.
+    const changes = SITE ? SITE.logicalChanges(storedChanges) : storedChanges;
     let needRecue = false;
     let enabledChanged = false;
     for (const k of Object.keys(changes)) {
@@ -416,7 +542,12 @@
   });
 
   // ---- generic helpers -----------------------------------------------------
+  // ---- platform seams ------------------------------------------------------
+  // Each of these delegates to site.js, which owns the extension's only
+  // per-site code. The inline fallbacks reproduce the original YouTube
+  // behaviour, so content.js still works if the adapter did not load.
   function videoIdFromLocation() {
+    if (SITE) return SITE.videoKey();
     try {
       const u = new URL(location.href);
       return u.searchParams.get("v") || "";
@@ -426,15 +557,27 @@
   }
 
   function getPlayer() {
+    if (SITE) return SITE.getPlayer();
     return document.querySelector("#movie_player") ||
            document.querySelector(".html5-video-player");
   }
 
   function getVideo() {
+    if (SITE) return SITE.getVideo();
     const p = getPlayer();
     return (p && p.querySelector("video")) ||
            document.querySelector("video.html5-main-video") ||
            document.querySelector("video");
+  }
+
+  // The element the overlay is absolutely positioned against: the video box,
+  // not the whole player area (Bilibili's player wrapper also carries the
+  // send-danmaku bar, and anchoring there would push the subtitles off the
+  // picture). Identical to the player on YouTube.
+  function overlayHostEl() {
+    const player = getPlayer();
+    if (!player) return null;
+    return (SITE ? SITE.overlayHost(player) : player) || player;
   }
 
   // Remove only known sound-description tags, not arbitrary bracketed speech.
@@ -461,13 +604,11 @@
   // Read the currently displayed native caption text (fallback path).
   // Read ONLY .ytp-caption-segment (the combined node would duplicate text).
   function readNativeCaption(clean = true) {
-    const segs = document.querySelectorAll(".ytp-caption-segment");
-    if (!segs.length) return "";
-    let parts = [];
-    segs.forEach((s) => {
-      const t = s.textContent.trim();
-      if (t) parts.push(t);
-    });
+    const parts = SITE
+      ? SITE.nativeCaptionSegments()
+      : Array.from(document.querySelectorAll(".ytp-caption-segment"))
+          .map((s) => s.textContent.trim()).filter(Boolean);
+    if (!parts.length) return "";
     const text = parts.join(" ");
     return clean ? stripSoundDescriptions(text) : text;
   }
@@ -504,13 +645,35 @@
 
     overlay.appendChild(transEl);
     overlay.appendChild(origEl);
+
     buildHandle();                  // drag grip (its listeners die with overlay)
     buildResizeHandles();
-    player.appendChild(overlay);
+
+    // Carries the reason when there is no caption to show (see setOverlayStatus).
+    // Appended LAST so the existing child order (translation, original, handle,
+    // resize handles) is untouched; styleOverlay() places it with flex `order`,
+    // which works independently of DOM position.
+    statusEl = document.createElement("div");
+    statusEl.className = "ytds-line ytds-status notranslate";
+    statusEl.setAttribute("translate", "no");
+    statusEl.setAttribute("dir", "auto");
+    statusEl.textContent = overlayStatus;
+    statusEl.classList.toggle("ytds-status-on", !!overlayStatus);
+    overlay.appendChild(statusEl);
+    // Attach to the video box rather than to the whole player area.
+    const host = overlayHostEl() || player;
+    // The overlay is absolutely positioned, so its host must establish the
+    // containing block. Only touch a host that does not already do so.
+    if (host !== player) {
+      try {
+        if (getComputedStyle(host).position === "static") host.style.position = "relative";
+      } catch (_e) { /* ignore */ }
+    }
+    host.appendChild(overlay);
     styleOverlay();
     if (typeof ResizeObserver !== "undefined") {
       overlayResizeObserver = new ResizeObserver(scheduleOverlayLayout);
-      overlayResizeObserver.observe(player);
+      overlayResizeObserver.observe(host);
       overlayResizeObserver.observe(overlay);
     }
     return overlay;
@@ -753,6 +916,7 @@
   // Reserve the native controls even while they are faded out, so showing them
   // does not move the subtitles or put selectable text on top of their buttons.
   function playerBottomInset(player, rect) {
+    if (SITE) return SITE.playerBottomInset(player, rect);
     const controls = player.querySelector(".ytp-chrome-bottom");
     const controlsRect = controls?.getBoundingClientRect?.();
     const measured = controlsRect && controlsRect.height > 0 &&
@@ -778,7 +942,9 @@
   function layoutOverlay() {
     if (!overlay || !origEl || !transEl) return;
     const player = getPlayer();
-    const rect = player?.getBoundingClientRect?.();
+    // Sizes and positions are measured against the video box, which is also the
+    // overlay's containing block (the same element as the player on YouTube).
+    const rect = (overlayHostEl() || player)?.getBoundingClientRect?.();
     if (!rect || !rect.width || !rect.height) return;
     const original = Math.max(1, Number(settings.origSize) || DEFAULTS.origSize);
     const translated = Math.max(1, Number(settings.transSize) || DEFAULTS.transSize);
@@ -838,7 +1004,7 @@
       overlay.classList.add("ytds-pos-" + settings.position);
     }
     const player = getPlayer();
-    const rect = player?.getBoundingClientRect?.();
+    const rect = (overlayHostEl() || player)?.getBoundingClientRect?.();
     if (!rect || !rect.width || !rect.height) return;
     const edge = 14;
     const height = overlay.offsetHeight || 0;
@@ -897,6 +1063,15 @@
     transEl.style.display = settings.showTranslation ? "" : "none";
     overlay.classList.toggle("ytds-word-lookup-on", !!settings.wordLookup);
 
+    // The status line always sits at the BOTTOM of the box, whichever way the
+    // subtitle lines are ordered. With `column` the main axis runs downwards
+    // (last order = bottom); with `column-reverse` it runs upwards (first
+    // order = bottom).
+    if (statusEl) {
+      statusEl.style.order = settings.order === "trans-top" ? "1" : "-1";
+      statusEl.style.fontFamily = fontStack(settings.origFont);
+    }
+
     applyPosition();
     updateEmptyState();
     applyRevealState();
@@ -917,6 +1092,8 @@
     if (overlay) { overlay.remove(); overlay = null; } // removes handle + its listeners
     origEl = null;
     transEl = null;
+    statusEl = null;
+    overlayStatus = "";
     handleEl = null;
   }
 
@@ -940,9 +1117,47 @@
     if (!overlay) return;
     const oEmpty = !settings.showOriginal || !lineText(origEl);
     const tEmpty = !settings.showTranslation || !lineText(transEl);
-    overlay.classList.toggle("ytds-empty", oEmpty && tEmpty);
+    // A reported reason keeps the box open: it is the thing the user needs to
+    // read when there is no caption to show.
+    overlay.classList.toggle("ytds-empty", oEmpty && tEmpty && !overlayStatus);
     updateNativeSuppression();
     scheduleOverlayLayout();
+  }
+
+  // Why no caption is being shown. Shown in the overlay (Bilibili reports a
+  // reason; YouTube reports none and is unaffected) so the five "no subtitles"
+  // situations are told apart instead of collapsing into one blank box.
+  let overlayStatus = "";
+  function setOverlayStatus(text) {
+    overlayStatus = text || "";
+    if (!statusEl) return;
+    statusEl.textContent = overlayStatus;
+    statusEl.classList.toggle("ytds-status-on", !!overlayStatus);
+    updateEmptyState();
+  }
+
+  const STATUS_TEXT = {
+    unsupported_page: () => t("bbUnsupportedPage", "当前页面不是 B 站视频播放页"),
+    loading: () => t("bbLoading", "正在读取中文字幕…"),
+    need_login: () => t("bbNeedLogin", "字幕需要登录后才能读取，请先在 B 站登录"),
+    no_track: () => t("bbNoTrack", "该视频没有中文字幕轨 · 可在设置中导入 SRT 字幕文件"),
+    not_chinese: () => t("bbNotChinese", "该视频没有中文字幕轨 · 可导入 SRT 字幕文件"),
+    fetch_failed: () => t("bbFetchFailed", "中文字幕读取失败"),
+    import_missing: () => t("bbImportMissing", "此视频与分 P 还没有导入的字幕"),
+    // The file IS the source, so the line names it: the overlay should never be
+    // a mystery about where its text came from.
+    import_bound: (name) => t("bbImportActive", "字幕来自导入的文件") + (name ? "：" + name : ""),
+    // Same principle for recognized speech: never let it read as the uploader's
+    // own captions, or as a precise alignment it is not.
+    recognized_bound: () => t("bbRecognizedActive", "字幕来自本机语音识别"),
+    recognized_lost: () => t("bbRecognizedStopped", "语音识别已停止")
+  };
+
+  function statusTextFor(reason, detail) {
+    const base = STATUS_TEXT[reason] ? STATUS_TEXT[reason]() : "";
+    if (!base) return "";
+    if (reason === "import_bound") return STATUS_TEXT.import_bound(detail);
+    return detail && reason === "fetch_failed" ? base + "：" + detail : base;
   }
 
   function updateNativeSuppression() {
@@ -1354,14 +1569,15 @@
 
   function ensureToggleButton(retries) {
     const player = getPlayer();
-    const rc = player && player.querySelector(".ytp-right-controls");
+    const rc = player && (SITE ? SITE.controlsHost(player)
+                              : player.querySelector(".ytp-right-controls"));
     if (!rc) {                              // controls not ready yet — retry briefly
       if (retries > 0) setTimeout(() => ensureToggleButton(retries - 1), 500);
       return;
     }
     if (toggleBtn && toggleBtn.isConnected) { updateToggleState(); return; }
     toggleBtn = document.createElement("button");
-    toggleBtn.className = "ytp-button ytds-toggle notranslate";
+    toggleBtn.className = SITE ? SITE.toggleButtonClass() : "ytp-button ytds-toggle notranslate";
     toggleBtn.type = "button";
     toggleBtn.setAttribute("translate", "no");
     toggleBtn.innerHTML =
@@ -1418,17 +1634,27 @@
   // extension off restores it — but only if WE were the ones who turned it on.
   let weEnabledCC = false;
 
+  function captionsButton() {
+    if (SITE) return SITE.captionsButton();
+    return document.querySelector(".ytp-subtitles-button");
+  }
+
+  function captionsAreOn(cc) {
+    if (SITE) return SITE.captionsOn(cc);
+    return cc.getAttribute("aria-pressed") === "true";
+  }
+
   function ensureCaptionsOn(retries) {
     if (!settings.enabled || !settings.autoCaptions) return;
-    const cc = document.querySelector(".ytp-subtitles-button");
-    if (!cc || cc.getAttribute("aria-pressed") === null ||
+    const cc = captionsButton();
+    if (!cc || (!SITE && cc.getAttribute("aria-pressed") === null) ||
         cc.getAttribute("aria-disabled") === "true") {
       if (retries > 0) setTimeout(() => ensureCaptionsOn(retries - 1),
         retries > 10 ? 200 : 600);
       return;                                   // button / state not ready yet
     }
-    if (cc.getAttribute("aria-pressed") !== "true") {
-      cc.click();
+    if (!captionsAreOn(cc)) {
+      if (SITE) SITE.clickCaptions(cc); else cc.click();
       weEnabledCC = true;
     }
   }
@@ -1436,13 +1662,19 @@
   function restoreCaptionsIfWeEnabled() {
     if (!weEnabledCC) return;
     weEnabledCC = false;
-    const cc = document.querySelector(".ytp-subtitles-button");
-    if (cc && cc.getAttribute("aria-pressed") === "true") cc.click();
+    const cc = captionsButton();
+    if (cc && captionsAreOn(cc)) { if (SITE) SITE.clickCaptions(cc); else cc.click(); }
   }
 
   function syncCaptions() {
-    // autoCaptions off = leave YouTube's own CC switch alone; the user turns it
+    // autoCaptions off = leave the site's own CC switch alone; the user turns it
     // on when they want subtitles, and we still render our overlay on top.
+    // A site whose caption control is not a plain on/off switch is never
+    // clicked: there the reader fetches the track on its own.
+    if (SITE && SITE.autoEnableNativeCaptions === false) {
+      restoreCaptionsIfWeEnabled();
+      return;
+    }
     if (settings.enabled && settings.autoCaptions) ensureCaptionsOn(20);
     else restoreCaptionsIfWeEnabled();
   }
@@ -2160,6 +2392,18 @@
       !!transEl?.textContent;
     nocuesFallback = false;
     stopFallback();                 // cue mode wins; stop scraping
+    // Which of the three sources this set belongs to. Cues that name one are
+    // taken at their word; anything else is the page's own, which is what every
+    // existing reader path sends.
+    const declaredSource = data.cueSource === CUE_SOURCE_RECOGNIZED
+      ? CUE_SOURCE_RECOGNIZED
+      : (data.cueSource === CUE_SOURCE_IMPORT ? CUE_SOURCE_IMPORT : CUE_SOURCE_PAGE);
+    cueSource = declaredSource;
+    // A caption track is here now, so any earlier "why is there nothing"
+    // message is no longer true.
+    nocuesReason = "";
+    nocuesReasonText = "";
+    setOverlayStatus("");
 
     // cues arrive in json3 EVENT ORDER, with the aligned translation already
     // paired onto each cue as cue.trans (done in inject.js BEFORE any sort).
@@ -2385,7 +2629,313 @@
     cueSourceLang = data?.sourceLang || "auto";
     translationPending = false;
     fastPreviewIdx = -1;
+    // Only the Bilibili reader reports a reason. YouTube's reader leaves it
+    // empty, so YouTube's "no cues" path stays exactly as it was: it quietly
+    // falls back to reading the rendered captions.
+    nocuesReason = (data && data.reason) || "";
+    nocuesReasonText = (data && data.detail) || "";
+    setOverlayStatus(nocuesReason ? statusTextFor(nocuesReason, nocuesReasonText) : "");
     if (settings.enabled) startFallback();
+  }
+
+  // =========================================================================
+  // LOCAL SUBTITLE FILE (Bilibili supplement)
+  // =========================================================================
+  // When a video has no readable Chinese caption track, the user can bind an
+  // SRT file to it. The file is kept in chrome.storage.local (never sync: it can
+  // be large, it is the user's own material, and it must not travel between
+  // machines) under a key that carries the video AND the part, so subtitles
+  // imported for one part can never appear on another.
+  //
+  // An imported file takes precedence over whatever the page offers: while one
+  // is bound, the caption reader's cues are ignored rather than mixed in.
+  let importedSrt = null;        // { key, name, cues }
+  let importedSrtStatus = "";
+  let importedNoticeTimer = null;
+
+  function srtStorageKey() {
+    const key = SRT ? SRT.storageKey(currentVideoId) : "";
+    return key || "";
+  }
+
+  function srtArea() {
+    try { return chrome.storage && chrome.storage.local ? chrome.storage.local : null; }
+    catch (_e) { return null; }
+  }
+
+  function readSrtRecord(key) {
+    return new Promise((resolve) => {
+      const area = srtArea();
+      if (!area || !key) { resolve(null); return; }
+      try {
+        area.get(key, (saved) => {
+          if (chrome.runtime.lastError) { resolve(null); return; }
+          resolve((saved && saved[key]) || null);
+        });
+      } catch (_e) { resolve(null); }
+    });
+  }
+
+  function writeSrtRecord(key, record) {
+    return new Promise((resolve) => {
+      const area = srtArea();
+      if (!area || !key) { resolve(false); return; }
+      try {
+        area.set({ [key]: record }, () => resolve(!chrome.runtime.lastError));
+      } catch (_e) { resolve(false); }
+    });
+  }
+
+  function removeSrtRecord(key) {
+    return new Promise((resolve) => {
+      const area = srtArea();
+      if (!area || !key) { resolve(); return; }
+      try { area.remove(key, () => resolve()); } catch (_e) { resolve(); }
+    });
+  }
+
+  // Hand the bound file to the SAME cue pipeline a caption track uses: the
+  // original is shown immediately, the translation queue runs unchanged, and
+  // play/pause/seek/fullscreen behave exactly as they do for page captions.
+  function applyImportedCues() {
+    if (!importedSrt || !importedSrt.cues || !importedSrt.cues.length) return false;
+    const data = {
+      videoId: currentVideoId,
+      nonce: configNonce,
+      cues: importedSrt.cues,
+      tcues: null,
+      aligned: null,
+      translationPending: false,
+      sourceLang: "zh-CN",
+      cueSource: CUE_SOURCE_IMPORT
+    };
+    importedSrtStatus = importedSrt.name || "";
+    onCues(data);
+    // Say where the text came from, then get out of the way: the source is
+    // always visible in the popup, and a permanent third line would be clutter
+    // the user did not ask for.
+    setOverlayStatus(statusTextFor("import_bound", importedSrtStatus));
+    if (importedNoticeTimer) clearTimeout(importedNoticeTimer);
+    importedNoticeTimer = setTimeout(() => {
+      importedNoticeTimer = null;
+      if (importedSrt) setOverlayStatus("");
+    }, 6000);
+    return true;
+  }
+
+  // Load (or forget) the file bound to the video that is playing now.
+  async function resolveImportedSrt() {
+    importedSrt = null;
+    importedSrtStatus = "";
+    if (!SRT || !settings.enabled) return false;
+    const key = srtStorageKey();
+    if (!key) return false;
+    const record = await readSrtRecord(key);
+    if (!record || typeof record.text !== "string") return false;
+    const cues = SRT.toCues(record.text);
+    if (!cues || !cues.length) {
+      importedSrtStatus = String(record.name || "");
+      setOverlayStatus(statusTextFor("import_missing", importedSrtStatus));
+      return false;
+    }
+    importedSrt = { key, name: String(record.name || ""), cues };
+    return true;
+  }
+
+  async function handleImportSrt(msg) {
+    if (!SRT || !SITE || !SITE.isBilibili) return { ok: false, reason: "unsupported" };
+    const text = typeof msg.text === "string" ? msg.text : "";
+    if (!text) return { ok: false, reason: "empty" };
+    if (text.length > SRT.MAX_BYTES) return { ok: false, reason: "toolarge" };
+    const parsed = SRT.parse(text);
+    if (!parsed) return { ok: false, reason: "nocues" };
+    const key = srtStorageKey();
+    if (!key) return { ok: false, reason: "novideo" };
+    // Replacing an existing file is the same operation: one file per video.
+    const stored = await writeSrtRecord(key, { name: String(msg.name || "").slice(0, 200), text });
+    if (!stored) return { ok: false, reason: "storage" };
+    importedSrt = { key, name: String(msg.name || ""), cues: parsed.cues };
+    importedSrtStatus = importedSrt.name;
+    stopFallback();
+    applyImportedCues();
+    return { ok: true, count: parsed.cues.length, dropped: parsed.dropped, name: importedSrt.name };
+  }
+
+  async function handleClearSrt() {
+    const key = srtStorageKey();
+    if (key) await removeSrtRecord(key);
+    importedSrt = null;
+    importedSrtStatus = "";
+    setOverlayStatus("");
+    // Fall back to the page: the reader is asked again and the overlay empties
+    // until something arrives.
+    teardownAll();
+    applyStateToDom();
+    return { ok: true };
+  }
+
+  // =========================================================================
+  // RECOGNIZED CAPTIONS (local speech recognition)
+  // =========================================================================
+  // The bridge recognizes the audio of a video that has no usable caption
+  // track and sends sentences back. They take the SAME cue path page captions
+  // take — same timer, same play/pause/seek/fullscreen behaviour, same word
+  // lookup, dictionary, study and export — so nothing about the display layer
+  // needs a second implementation.
+  //
+  // Two rules are enforced here rather than trusted to the sender:
+  //
+  //  * the whole batch is replaced, never appended to. A revision that arrives
+  //    late therefore corrects a sentence instead of adding a duplicate one.
+  //  * a cue's start is the media time the bridge computed from the video
+  //    timeline. Nothing in this path reads a wall clock.
+  function applyRecognizedCues(data) {
+    if (!data || !Array.isArray(data.cues)) return { ok: false, reason: "nocues" };
+    if (data.videoId && currentVideoId && data.videoId !== currentVideoId) {
+      // The page moved on while recognition was running; a stale batch must not
+      // paint over the new video.
+      return { ok: false, reason: "stale" };
+    }
+    if (!data.cues.length) return { ok: false, reason: "empty" };
+    // A real caption track appearing now outranks recognition. Recognition is
+    // the fallback for videos that have nothing; the moment the page has
+    // something, stacking the two would show two different sets of subtitles.
+    if (captionAvailabilityState() === CAPTIONS_PRESENT && cueSource !== CUE_SOURCE_RECOGNIZED) {
+      recogState = "failed";
+      recogMessage = "captions_appeared";
+      return { ok: false, reason: "captions_present" };
+    }
+    const wasRecognized = cueSource === CUE_SOURCE_RECOGNIZED;
+    const data2 = {
+      videoId: currentVideoId,
+      nonce: configNonce,
+      cues: data.cues,
+      tcues: null,
+      // The bridge already translated: the German rides on each cue, so the
+      // translation queue must not fetch it again. Word times are deliberately
+      // absent — a Chinese word time is not a German pronunciation time.
+      aligned: true,
+      translationPending: false,
+      sourceLang: data.sourceLang || "zh",
+      cueSource: CUE_SOURCE_RECOGNIZED
+    };
+    onCues(data2);
+    recogCueCount = displayCueList ? displayCueList.length : data.cues.length;
+    cueSource = CUE_SOURCE_RECOGNIZED;
+    if (!wasRecognized) {
+      // Say where the text came from, once, when the first batch lands.
+      setOverlayStatus(statusTextFor("recognized_bound", ""));
+      if (recognizedNoticeTimer) clearTimeout(recognizedNoticeTimer);
+      recognizedNoticeTimer = setTimeout(() => {
+        recognizedNoticeTimer = null;
+        if (cueSource === CUE_SOURCE_RECOGNIZED) setOverlayStatus("");
+      }, 6000);
+    }
+    return { ok: true, count: recogCueCount };
+  }
+
+  // The popup asks before it offers the button, and the answer comes from the
+  // page rather than from a guess: this is the gate that keeps recognition off
+  // every video that already has subtitles.
+  function handleRecognitionContext() {
+    return { ok: true, context: recognitionContext() };
+  }
+
+  function applyRecognitionState(state) {
+    if (state && typeof state.state === "string") recogState = state.state;
+    if (state && typeof state.message === "string") recogMessage = state.message;
+    if (state && typeof state.cueCount === "number") recogCueCount = state.cueCount;
+    // The page is the timeline authority for recognition, so the reporter runs
+    // for exactly as long as a session lives.
+    if (recogState === "starting" || recogState === "running") startMediaReporter();
+    else if (recogState !== "") stopMediaReporter();
+    return { ok: true, state: recognitionContext() };
+  }
+
+  // =========================================================================
+  // MEDIA TIME REPORTER
+  // =========================================================================
+  // A live session cannot place captured audio on the video without being told
+  // where the video is. These reports are the only source of media time in the
+  // recognition path: the offscreen recorder stamps audio with the time carried
+  // forward from the last report, and the bridge measures every caption from it.
+  // Nothing here reads a clock of its own.
+  const MEDIA_REPORT_MS = 250;
+
+  function mediaReport(extra) {
+    const video = getVideo();
+    if (!video) return null;
+    const currentTime = Number(video.currentTime);
+    if (!Number.isFinite(currentTime) || currentTime < 0) return null;
+    const duration = Number(video.duration);
+    return Object.assign({
+      type: "mediaReport",
+      videoId: currentVideoId,
+      mediaMs: Math.round(currentTime * 1000),
+      wallMs: Date.now(),
+      rate: Number(video.playbackRate) || 1,
+      paused: !!video.paused || !!video.ended,
+      durationMs: Number.isFinite(duration) && duration > 0 ? Math.round(duration * 1000) : null,
+      part: (currentVideoId.match(/#p(\d+)/) || [])[1] || "",
+      videoKey: currentVideoId
+    }, extra || {});
+  }
+
+  function sendMediaReport(extra) {
+    const report = mediaReport(extra);
+    if (!report) return false;
+    try {
+      chrome.runtime.sendMessage(report, () => { void chrome.runtime.lastError; });
+    } catch (_e) { return false; }
+    return true;
+  }
+
+  // Sent immediately, not on the next tick: a seek or a pause must reach the
+  // recorder before the audio that follows it is stamped.
+  function mediaEvent(type) {
+    if (!mediaReportTimer) return;
+    sendMediaReport({ event: type });
+  }
+
+  function startMediaReporter() {
+    if (mediaReportTimer) return;
+    sendMediaReport({ event: "start" });
+    mediaReportTimer = setInterval(() => { sendMediaReport({ event: "tick" }); }, MEDIA_REPORT_MS);
+  }
+
+  function stopMediaReporter() {
+    if (mediaReportTimer) {
+      clearInterval(mediaReportTimer);
+      mediaReportTimer = null;
+    }
+    sendMediaReport({ event: "stop" });
+  }
+
+  // The page's own playback events, forwarded only while a session is live.
+  // Bound through a target that really supports listeners: several test
+  // harnesses inject a document stand-in with no addEventListener, and losing
+  // this subscription must not take the whole overlay down with it.
+  function onPlaybackEvent(event) {
+    if (!mediaReportTimer) return;
+    mediaEvent(event.type);
+  }
+  const playbackEventTarget =
+    document && typeof document.addEventListener === "function" ? document : window;
+  for (const name of ["play", "pause", "seeking", "seeked", "ratechange", "ended"]) {
+    playbackEventTarget.addEventListener(name, onPlaybackEvent, true);
+  }
+
+  // Forgetting recognition puts the page's own path back in charge, exactly as
+  // clearing an imported file does.
+  function handleClearRecognized() {
+    recogCueCount = 0;
+    stopMediaReporter();
+    if (cueSource === CUE_SOURCE_RECOGNIZED) {
+      cueSource = CUE_SOURCE_PAGE;
+      teardownAll();
+      applyStateToDom();
+    }
+    return { ok: true };
   }
 
   // =========================================================================
@@ -2408,7 +2958,7 @@
       ? displayCueList[activeCueIdx] : null;
     if (cue) {
       if (translationPending && fastPreviewIdx === activeCueIdx) transSource = "google";
-      else if (cue.trans) transSource = "youtube";
+      else if (cue.trans) transSource = SITE ? SITE.platform : "youtube";
       else if (transCache.has(cueVideoId + " " + activeCueIdx)) transSource = "google";
       else if (translationPending) transSource = "waiting";
       else transSource = "google";
@@ -2419,18 +2969,43 @@
     return {
       ok: true,
       version: liveVersion(),
+      platform: SITE ? SITE.platform : "youtube",
       videoId: currentVideoId,
       enabled: !!settings.enabled,
       backend: settings.backend,
       targetLang: settings.targetLang,
       sourceLang: cueSourceLang,
       mode,                                 // cues | scrape | off
-      source: cueVideoId ? "youtube" : (lastSource ? "native" : "none"),
-      transSource,                          // youtube | google | waiting | none
+      source: cueVideoId ? (SITE ? SITE.platform : "youtube")
+                         : (lastSource ? "native" : "none"),
+      transSource,                          // <platform> | google | waiting | none
+      // Why nothing is being shown, when the reader knows (Bilibili only).
+      nocuesReason,
+      nocuesDetail: nocuesReasonText,
+      // Manual track switching: the list the reader last reported, and the
+      // track this video is currently pinned to (empty = automatic choice).
+      tracks: settings.bbTracks || "",
+      manualTrack: manualTrackId(),
+      // The local subtitle file bound to this exact video and part, if any.
+      importName: importedSrt ? importedSrt.name : "",
+      importCount: importedSrt ? importedSrt.cues.length : 0,
       wordTiming: !settings.enabled || !settings.karaoke ? "off" : wordTimingSource,
       audioStale: !!audioStaleRecord,
       audioJob: audioJobState,              // running | done | failed | ""
       cueCount: displayCueList ? displayCueList.length : 0,
+      // Where the visible text came from (page | import | recognized). The
+      // overlay must never present recognized speech as the uploader's own
+      // captions, so the popup needs to be able to say which one is on screen.
+      cueSource,
+      // The local-recognition gate: only "absent" may start capture.
+      captionAvailability: captionAvailabilityState(),
+      recognitionState: recogState,
+      recognitionMessage: recogMessage,
+      recognitionCueCount: recogCueCount,
+      // The popup's recognition card reads the configured endpoint back from
+      // here so the fields always match what recognition will actually use.
+      bridgeBase: settings.bridgeBase || "",
+      bridgeToken: settings.bridgeToken || "",
       pending: !!translationPending,
       cached: !!usedVideoCache,
       cooldownSec: Math.max(0, Math.ceil((gtxCooldownUntil - Date.now()) / 1000))
@@ -2470,9 +3045,6 @@
       sendResponse({ ok: true, videoId: currentVideoId, sourceLang: cueSourceLang,
         title: videoTitle(), positionMs: (getVideo()?.currentTime || 0) * 1000,
         cuesKey: cuesKey(), audioStale: audioStaleRecord,
-        // Each sentence carries its position in the track. The helper echoes it,
-        // and a result is only applied to the sentence that still sits there, so
-        // a re-ordered or re-segmented track cannot receive another cue's times.
         cues: displayCueList.map((cue, index) => ({ cue, index }))
           .filter(({ cue }) => !window.YtdsWordTiming.captionPieces(cue, cueSourceLang))
           .map(({ cue, index }) => ({ index, start: cue.start, dur: cue.end - cue.start,
@@ -2647,6 +3219,31 @@
       sendResponse({ ok: true, visible: settings.showTranslation });
       return;
     }
+    if (msg.type === "importSrt") {
+      handleImportSrt(msg).then(sendResponse).catch(() => sendResponse({ ok: false, reason: "failed" }));
+      return true;                                            // async reply
+    }
+    if (msg.type === "clearSrt") {
+      handleClearSrt().then(sendResponse).catch(() => sendResponse({ ok: false }));
+      return true;                                            // async reply
+    }
+    if (msg.type === "recognitionContext") {
+      sendResponse(handleRecognitionContext());
+      return;
+    }
+    if (msg.type === "recognitionState") {
+      sendResponse(applyRecognitionState(msg));
+      return;
+    }
+    if (msg.type === "recognizedCues") {
+      try { sendResponse(applyRecognizedCues(msg)); }
+      catch (_e) { sendResponse({ ok: false, reason: "failed" }); }
+      return;
+    }
+    if (msg.type === "clearRecognized") {
+      sendResponse(handleClearRecognized());
+      return;
+    }
     if (msg.type !== "exportSrt") return;          // not ours — ignore
     handleExport(msg.variant)
       .then(sendResponse)
@@ -2736,6 +3333,7 @@
   }
 
   function videoTitle() {
+    if (SITE) return SITE.title() || "";
     const el = document.querySelector(
       "h1.ytd-watch-metadata yt-formatted-string, h1.title yt-formatted-string"
     );
@@ -2792,6 +3390,25 @@
     }
   }
 
+  // The overlay's translations live in the extension's OWN cache whenever the
+  // site has no translated caption track to hand back (always on Bilibili; on
+  // YouTube too, in the gtx fallback). The cache is keyed by the DISPLAY cue
+  // index — the grouped sentence list — so the translations are mapped back
+  // onto the raw cues by their start time.
+  function fillTransFromCache(cues) {
+    if (!cues || !cues.length || !cueVideoId || !displayCueList) return 0;
+    const byStart = new Map();
+    for (const c of cues) if (!byStart.has(c.start)) byStart.set(c.start, c);
+    let filled = 0;
+    for (let i = 0; i < displayCueList.length; i++) {
+      const text = transCache.get(cueVideoId + " " + i);
+      if (!text) continue;
+      const target = byStart.get(displayCueList[i].start);
+      if (target && !(target.trans || "").trim()) { target.trans = text; filled++; }
+    }
+    return filled;
+  }
+
   // Main export entry. Returns a serializable result for the popup:
   //   { ok:true, count, variant } | { ok:false, reason:"nocues"|"notrans"|"partial" }
   async function handleExport(variant) {
@@ -2809,11 +3426,16 @@
 
     // TRANSLATION / BILINGUAL.
     let cues = null;
-    // Fast path: the live overlay already has a fully-aligned tlang translation.
-    if (cueAligned === true && cueList && cueList.length && cueList.some((c) => c.trans)) {
+    if (SITE && SITE.supportsTlang === false) {
+      // No translated caption track exists on this site, so there is nothing to
+      // ask the page for: the original cues plus our own translation cache are
+      // the whole story. Copies are used so the live cue list is not mutated.
+      cues = (cueList && cueList.length) ? cueList.map((c) => ({ ...c })) : null;
+    } else if (cueAligned === true && cueList && cueList.length && cueList.some((c) => c.trans)) {
+      // Fast path: the live overlay already has a fully-aligned tlang translation.
       cues = cueList;
     } else {
-      // Fetch a complete paired set from inject (works in any backend mode).
+      // Fetch a complete paired set from the page reader (works in any backend mode).
       const data = await requestExportData(settings.targetLang);
       if (data && data.ok && Array.isArray(data.cues) && data.cues.length) {
         cues = data.cues.slice().sort((a, b) => a.start - b.start);
@@ -2827,6 +3449,7 @@
     }
 
     if (!cues || !cues.length) return { ok: false, reason: "nocues" };
+    fillTransFromCache(cues);
     if (!cues.some((c) => c.trans)) return { ok: false, reason: "notrans" };
     const missing = cues.filter((c) =>
       stripSoundDescriptions(c.text).trim() && !(c.trans || "").trim()).length;
@@ -2851,8 +3474,43 @@
     if (d.type === "exportdata") { resolveExportData(d); return; }
     if (!settings.enabled) return;
 
+    // A bound subtitle file is the source for this video: the page's own cues
+    // are ignored rather than allowed to overwrite it. The reader is still heard
+    // for its track list (the manual switcher) and once the file is unbound.
+    if (importedSrt && (d.type === "cues" || d.type === "nocues")) return;
+
     if (d.type === "cues") onCues(d);
     else if (d.type === "nocues") onNoCues(d);
+    else if (d.type === "tracks") onTrackList(d);
+  }
+
+  // The reader reported the caption tracks it could see for THIS video (and
+  // part). Stored as a compact JSON string because the settings store only
+  // accepts primitives; it is also what the popup renders as the manual
+  // switching entry.
+  function onTrackList(d) {
+    if (!d || d.videoId !== currentVideoId) return;
+    const list = Array.isArray(d.tracks) ? d.tracks : [];
+    const json = list.map((tr) => ({
+      lan: String(tr.lan || ""),
+      doc: String(tr.lanDoc || tr.doc || ""),
+      id: String(tr.idStr || tr.id || ""),
+      ai: tr.aiType === 1 || tr.ai === true
+    })).filter((tr) => tr.lan || tr.id).slice(0, 40);
+    const next = JSON.stringify(json);
+    if (next === String(settings.bbTracks || "")) return;
+    settings.bbTracks = next;
+    if (SITE && SITE.isBilibili) saveSettings({ bbTracks: next });
+  }
+
+  // The hand-picked track for THIS video, or "" when the user has not chosen
+  // one here. The video key is part of the stored value, so a pick made on
+  // another video (or another part of the same BV) is never applied.
+  function manualTrackId() {
+    const raw = String(settings.bbTrackId || "");
+    const cut = raw.indexOf("|");
+    if (cut <= 0) return "";
+    return raw.slice(0, cut) === currentVideoId ? raw.slice(cut + 1) : "";
   }
 
   function sendConfig() {
@@ -2861,11 +3519,16 @@
       window.postMessage({
         source: "ytds-content",
         type: "config",
+        platform: SITE ? SITE.platform : "youtube",
         targetLang: settings.targetLang,
-        useTlang: settings.backend !== "gtx",
+        // A site without a translated caption track never gets asked to wait
+        // for one: it would wait forever. Only the original track is read
+        // there, and the extension translates it itself.
+        useTlang: (SITE ? SITE.supportsTlang : true) && settings.backend !== "gtx",
         useWordTiming: !!settings.karaoke,
         // Approximate mode must not fetch another caption track at all.
         useAutoMatch: settings.timingMode !== "approximate",
+        trackId: manualTrackId(),
         nonce
       }, "*");
     } catch (_e) { /* ignore */ }
@@ -2893,6 +3556,8 @@
     gtxBackoffStep = 0;
     activeCueIdx = -1;
     nocuesFallback = false;
+    nocuesReason = "";
+    nocuesReasonText = "";
     clearHoverReveal();
     transInflight.clear();
     transRetryAt.clear();
@@ -2928,6 +3593,13 @@
       }
       sendConfig();             // ask inject.js for cues on the new video
       syncCaptions();           // auto-turn on YouTube CC so subs actually show
+      // A file bound to THIS video and part wins over the page's own captions;
+      // the local read is fast, and the reader is muted from the moment it lands.
+      resolveImportedSrt().then((bound) => {
+        if (!bound || !extAlive()) return;
+        stopFallback();
+        applyImportedCues();
+      });
     }
   }
 
@@ -2949,7 +3621,8 @@
   }
 
   // single listener instances (added once; never accumulate)
-  window.addEventListener("yt-navigate-finish", onNav, true);
+  if (SITE) SITE.onNavigate(onNav);
+  else window.addEventListener("yt-navigate-finish", onNav, true);
   window.addEventListener("message", onInjectMessage, false);
   window.addEventListener("seeked", onPlaybackJump, true);
   window.addEventListener("seeking", onPlaybackJump, true);
@@ -2973,6 +3646,11 @@
       observer?.disconnect();
       applyStateToDom();
       syncCaptions();
+      resolveImportedSrt().then((bound) => {
+        if (!bound || !extAlive()) return;
+        stopFallback();
+        applyImportedCues();
+      });
     };
     if (!document.documentElement || (settings.enabled && !getPlayer())) {
       observer = new MutationObserver(boot);

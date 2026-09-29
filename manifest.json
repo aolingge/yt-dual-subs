@@ -42,7 +42,7 @@
     },
     {
       "matches": ["https://www.youtube.com/*"],
-      "js": ["site.js", "srt.js", "settings.js", "word-timing.js", "content.js"],
+      "js": ["site.js", "srt.js", "settings.js", "word-timing.js", "bridge-client.js", "media-clock.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_start",
       "all_frames": false
@@ -56,7 +56,7 @@
     },
     {
       "matches": ["https://www.bilibili.com/video/*"],
-      "js": ["site.js", "srt.js", "settings.js", "word-timing.js", "content.js"],
+      "js": ["site.js", "srt.js", "settings.js", "word-timing.js", "bridge-client.js", "media-clock.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_start",
       "all_frames": false

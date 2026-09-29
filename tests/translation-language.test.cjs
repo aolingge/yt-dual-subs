@@ -9,7 +9,8 @@ test('known subtitle language is used for short-sentence translation and cache i
   const urls = [];
   const chrome = {
     runtime: { onMessage: { addListener(fn) { listeners.message = fn; } } },
-    commands: { onCommand: { addListener() {} } }
+    commands: { onCommand: { addListener() {} } },
+    tabs: { onRemoved: { addListener() {} } }
   };
   const fetch = async (url) => {
     urls.push(url);

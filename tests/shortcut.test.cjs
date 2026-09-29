@@ -80,6 +80,7 @@ test('Alt+Shift+Y command is registered and sent only to the active tab', () => 
     runtime: { id: 'test-extension-id', onMessage: { addListener(fn) { listeners.message = fn; } } },
     commands: { onCommand: { addListener(fn) { listeners.command = fn; } } },
     tabs: {
+      onRemoved: { addListener() {} },
       query(query, done) {
         assert.equal(query.active, true);
         done([{ id: 42 }]);

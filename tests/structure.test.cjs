@@ -88,8 +88,12 @@ test('early page and isolated scripts use different timing paths with identical 
     assert.equal(isolated.run_at, 'document_start');
     // site.js is the platform adapter, so it must load before the display stack.
     // srt.js is the local-file parser the adapter's import path hands text to.
-    // The display stack itself is shared: no per-platform copy of content.js.
-    assert.deepEqual(isolated.js, ['site.js', 'srt.js', 'settings.js', 'word-timing.js', 'content.js']);
+    // bridge-client.js and media-clock.js are the local recognizer: the client
+    // that talks to the desktop bridge and the clock that keeps recognized text
+    // tied to the video's own time. The display stack itself is shared: no
+    // per-platform copy of content.js.
+    assert.deepEqual(isolated.js, ['site.js', 'srt.js', 'settings.js', 'word-timing.js',
+      'bridge-client.js', 'media-clock.js', 'content.js']);
   }
   assert.equal(read('word-timing-page.js'), read('word-timing.js'), 'keep the page copy synchronized');
 });
