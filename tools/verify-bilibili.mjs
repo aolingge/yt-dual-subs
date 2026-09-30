@@ -439,11 +439,153 @@ async function main() {
         report.errors.push("screenshot -> " + err.message);
       }
     }
+    // ---- 2b. pause, playback rate and seek --------------------------------
+    // The overlay must follow the video's own clock through a rate change, a
+    // seek into another sentence, a pause, and a seek back.
+    const SEEK_TO = (t) => `(() => {
+      const v = document.querySelector('video');
+      if (!v) return 'no video element';
+      v.currentTime = ${t};
+      v.dispatchEvent(new Event('seeking', { bubbles: true }));
+      v.dispatchEvent(new Event('seeked', { bubbles: true }));
+      const p = v.play(); if (p && p.catch) p.catch(function () {});
+      return 'currentTime=' + v.currentTime;
+    })()`;
+
+    await ctl.evaluate(`(() => { const v = document.querySelector('video');
+      v.playbackRate = 2; v.dispatchEvent(new Event('ratechange', { bubbles: true })); })()`);
+    report.rateSeekCall = await ctl.evaluate(SEEK_TO(3.35));
+    await sleep(1800);
+    report.afterRateSeek = await ctl.evaluate(probe);
+
+    await ctl.evaluate(`(() => { const v = document.querySelector('video'); v.pause(); })()`);
+    await sleep(1500);
+    report.afterPause = await ctl.evaluate(probe);
+
+    report.backSeekCall = await ctl.evaluate(SEEK_TO(0.6));
+    await sleep(1800);
+    report.afterBackSeek = await ctl.evaluate(probe);
+    await ctl.evaluate(`(() => { const v = document.querySelector('video');
+      v.playbackRate = 1; v.dispatchEvent(new Event('ratechange', { bubbles: true })); })()`);
+    report.steps.push("pause, playback rate and seek probed");
+
+    // ---- 2c. fullscreen ----------------------------------------------------
+    // The overlay lives inside the player, so entering the player's fullscreen
+    // must leave it inside the fullscreen element and still rendering.
+    // Freeze inside a cue first: a paused player between sentences shows an
+    // empty overlay, which would make the geometry checks below meaningless.
+    report.freezeCall = await ctl.evaluate(SEEK_TO(1.0));
+    await sleep(900);
+    await ctl.evaluate(`(() => { const v = document.querySelector('video'); v.pause(); })()`);
+    await sleep(500);
+
+    const FS_PROBE = `(() => {
+      const overlay = document.querySelector('#ytds-overlay');
+      const fsEl = document.fullscreenElement;
+      const r = overlay ? overlay.getBoundingClientRect() : null;
+      const pr = fsEl ? fsEl.getBoundingClientRect() : null;
+      const box = (b) => b && { x: Math.round(b.x), y: Math.round(b.y),
+        w: Math.round(b.width), h: Math.round(b.height) };
+      const line = overlay && overlay.querySelector('.ytds-orig');
+      return {
+        fullscreenElement: fsEl ? (fsEl.id || fsEl.className) : null,
+        overlay: box(r), player: box(pr),
+        inside: !!(r && pr && r.left >= pr.left - 1 && r.right <= pr.right + 1
+          && r.top >= pr.top - 1 && r.bottom <= pr.bottom + 1),
+        orig: line ? line.textContent : ''
+      };
+    })()`;
+
+    try {
+      const box = await ctl.evaluate(`(() => { const el = document.querySelector('#bilibili-player');
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`);
+      // A click first: requestFullscreen needs user activation, and the test
+      // page's player ignores a click (its video has no controls attribute).
+      for (const type of ["mousePressed", "mouseReleased"]) {
+        await ctl.send("Input.dispatchMouseEvent", {
+          type, x: box.x, y: box.y, button: "left", clickCount: 1
+        });
+      }
+      // The promise is deliberately not awaited: a headless browser may never
+      // settle it, and the state that matters is `document.fullscreenElement`.
+      report.fullscreenCall = await ctl.evaluate(`(() => {
+        const el = document.querySelector('#bilibili-player');
+        if (!el) return 'no player';
+        if (!el.requestFullscreen) return 'no requestFullscreen';
+        const p = el.requestFullscreen();
+        if (p && p.catch) p.catch(function () {});
+        return 'requested'; })()`);
+      await sleep(2500);
+      report.fullscreen = await ctl.evaluate(FS_PROBE);
+      await ctl.evaluate(`(() => { if (document.fullscreenElement) {
+        return document.exitFullscreen().then(() => 'exited').catch((e) => e.message); }
+        return 'was not in fullscreen'; })()`);
+      await sleep(1200);
+      report.afterFullscreen = await ctl.evaluate(FS_PROBE);
+      report.steps.push("fullscreen entered and exited");
+    } catch (err) {
+      report.errors.push("fullscreen -> " + err.message);
+    }
+
+    // ---- 2c-bis. the container grows to the viewport ------------------------
+    // A headless browser may refuse to enter real fullscreen, so the layout
+    // guarantee fullscreen depends on is checked directly: grow the player to
+    // the whole viewport, exactly as a fullscreen element would be sized, and
+    // require the overlay to stay inside it and keep rendering.
+    try {
+      report.grownPlayer = await ctl.evaluate(`(() => {
+        const el = document.querySelector('#bilibili-player');
+        if (!el) return 'no player';
+        el.dataset.ytdsPrevStyle = el.getAttribute('style') || '';
+        el.style.position = 'fixed';
+        el.style.left = '0'; el.style.top = '0';
+        el.style.width = '100vw'; el.style.height = '100vh';
+        el.style.margin = '0';
+        return 'grown'; })()`);
+      await sleep(1000);
+      report.grown = await ctl.evaluate(`(() => {
+        const el = document.querySelector('#bilibili-player');
+        const overlay = document.querySelector('#ytds-overlay');
+        const pr = el ? el.getBoundingClientRect() : null;
+        const r = overlay ? overlay.getBoundingClientRect() : null;
+        const line = overlay && overlay.querySelector('.ytds-orig');
+        return {
+          player: pr && { w: Math.round(pr.width), h: Math.round(pr.height) },
+          overlay: r && { w: Math.round(r.width), h: Math.round(r.height) },
+          inside: !!(r && pr && r.left >= pr.left - 1 && r.right <= pr.right + 1
+            && r.top >= pr.top - 1 && r.bottom <= pr.bottom + 1),
+          orig: line ? line.textContent : ''
+        };
+      })()`);
+      await ctl.evaluate(`(() => { const el = document.querySelector('#bilibili-player');
+        if (!el) return 'no player';
+        el.setAttribute('style', el.dataset.ytdsPrevStyle || '');
+        return 'restored'; })()`);
+      await sleep(800);
+      report.afterGrown = await ctl.evaluate(probe);
+      report.steps.push("grown-to-viewport layout probed");
+    } catch (err) {
+      report.errors.push("grown player -> " + err.message);
+    }
+
+    // ---- 2d. switching part ------------------------------------------------
+    // The reader's key carries the part, so ?p=1 must be a different video with
+    // its own caption load — never the previous part's cues.
+    ctl.events.length = 0;
+    await ctl.send("Page.navigate", { url: "https://www.bilibili.com/video/BV1xx411c7mD/?p=1" });
+    await sleep(9000);
+    report.part1Posts = await ctl.evaluate("JSON.stringify(window.__probe)");
+    report.part1Seek = await ctl.evaluate(SEEK);
+    await sleep(2000);
+    report.part1 = await ctl.evaluate(probe);
+    report.steps.push("part switch probed");
+
     // ---- 3. an imported subtitle file, if asked for -----------------------
     // The file is put into the extension's own local storage, exactly where the
-    // popup's picker puts it, and the page is loaded again. The imported text
-    // must then be what is displayed for this video AND part, and the page's own
-    // captions must not overwrite it.
+    // popup's picker puts it. Its key names the video AND the part, so this runs
+    // in two halves on purpose: while the page is on ?p=1 the file bound to ?p=2
+    // must be ignored, and only after switching to ?p=2 may its text appear.
     if (process.env.YTDS_SRT) {
       // chrome.storage is only reachable from an extension context. The content
       // script's isolated world is one, and it is already running on this page,
@@ -468,15 +610,67 @@ async function main() {
           report.errors.push("srt: " + JSON.stringify(r.exceptionDetails).slice(0, 200));
         } else {
           report.srtStored = r.result.value;
+          report.srtBoundTo = SRT_STORE_KEY;
+
+          // Half one: still on ?p=1, where this file does not belong. The page's
+          // own Chinese captions must be what is shown.
           ctl.events.length = 0;
           await ctl.send("Page.reload");
           await sleep(11000);
+          report.srtOtherPartSeek = await ctl.evaluate(SEEK);
+          await sleep(2200);
+          report.srtOtherPart = await ctl.evaluate(probe);
+
+          // Half two: the part the file was bound to.
+          ctl.events.length = 0;
+          await ctl.send("Page.navigate", { url: "https://www.bilibili.com/video/BV1xx411c7mD/?p=2" });
+          await sleep(10000);
           report.srtPosts = await ctl.evaluate("JSON.stringify(window.__probe)");
           report.srtSeek = await ctl.evaluate(SEEK);
           await sleep(2200);
           report.srt = await ctl.evaluate(probe);
-          report.steps.push("imported subtitle file probed");
+          report.steps.push("imported subtitle file probed on both parts");
         }
+      }
+    }
+
+    // ---- 4. YouTube regression, if asked for ------------------------------
+    // The point is not to re-test YouTube's features (the source suite does
+    // that) but to prove the shared display stack still starts on the site it
+    // was built for: the same overlay, the YouTube button class, the YouTube
+    // video id, and the player's own control bar.
+    if (process.env.YTDS_YOUTUBE) {
+      const ytUrl = process.env.YTDS_YT_VIDEO
+        || "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+      try {
+        ctl.events.length = 0;
+        await ctl.send("Fetch.disable");
+        await ctl.send("Page.navigate", { url: ytUrl });
+        await sleep(14000);
+        report.youtubePosts = await ctl.evaluate("JSON.stringify(window.__probe)");
+        report.youtube = await ctl.evaluate(`(() => {
+          const overlay = document.querySelector('#ytds-overlay');
+          const player = document.querySelector('#movie_player')
+            || document.querySelector('.html5-video-player');
+          const lines = overlay ? [...overlay.querySelectorAll('.ytds-line')] : [];
+          return {
+            url: location.href,
+            player: !!player,
+            overlay: !!overlay,
+            attachedTo: overlay && overlay.parentElement
+              ? (overlay.parentElement.id || overlay.parentElement.className) : '',
+            trans: lines.filter((l) => l.classList.contains('ytds-trans')).map((l) => l.textContent),
+            orig: lines.filter((l) => l.classList.contains('ytds-orig')).map((l) => l.textContent),
+            toggle: !!document.querySelector('.ytds-toggle'),
+            toggleIsBili: !!document.querySelector('.ytds-toggle-bili'),
+            toggleInRightControls: !!document.querySelector('.ytp-right-controls .ytds-toggle'),
+            captionsButton: !!document.querySelector('.ytp-subtitles-button'),
+            htmlClass: document.documentElement.className
+          };
+        })()`);
+        report.steps.push("YouTube regression probed");
+      } catch (err) {
+        report.errors.push("youtube -> " + err.message);
       }
     }
 

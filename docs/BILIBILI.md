@@ -229,8 +229,45 @@ node --test tests/bilibili.test.cjs tests/srt-import.test.cjs
 node tools/verify-bilibili.mjs      # needs Edge; writes tools/verify-bilibili-report.json
 ```
 
-`tools/verify-bilibili.mjs` reports two runs separately: a real Bilibili video,
-and a controlled `bilibili.com/video` page whose network answers are supplied so
-the whole pipeline can be checked with fixed data. Only the extension is real in
-the second run — it says nothing about live caption availability. See the
-release notes for the recorded results.
+`tools/verify-bilibili.mjs` reports a real Bilibili video and a controlled
+`bilibili.com/video` page separately. Only the extension is real in the
+controlled run — its network answers are supplied, so it says nothing about
+live caption availability. Extra states are selected by environment variable:
+
+```sh
+YTDS_TRACKS=ai    node tools/verify-bilibili.mjs   # only an auto-generated Chinese track
+YTDS_TRACKS=none  node tools/verify-bilibili.mjs   # captions, but none Chinese
+YTDS_TRACKS=empty node tools/verify-bilibili.mjs   # no caption track at all
+YTDS_SRT=1        node tools/verify-bilibili.mjs   # import a subtitle file
+YTDS_YOUTUBE=1    node tools/verify-bilibili.mjs   # the YouTube regression
+YTDS_VIDEO=… YTDS_EDGE=… YTDS_EXT=… YTDS_PROFILE=… YTDS_CDP_PORT=… YTDS_REPORT=…
+```
+
+What has actually been observed:
+
+| Check | Where | Result |
+| --- | --- | --- |
+| A readable human Chinese track, German above and Chinese below | real video | shown, with cue times in milliseconds |
+| A human track preferred over an auto-generated one | controlled | the human `zh-CN` track chosen over `zh-Hans` AI |
+| Only an auto-generated Chinese track | controlled | selected and read |
+| Chinese word segmentation and the labelled approximate follow-along | controlled | 7 words, the active one highlighted, badge 近似跟读 |
+| Captions exist but none is Chinese | controlled | *该视频有字幕，但没有中文字幕轨。* |
+| No caption track | controlled | *该视频没有中文字幕轨，可改为导入 SRT 字幕文件。* |
+| A pause and a playback-rate change | controlled | the line holds at the paused time; a seek at 2× shows the new sentence |
+| Switching part | controlled | `…BV1xx411c7mD#p2` → `…#p1`, each part loading its own cues |
+| A subtitle file bound to another part | controlled | ignored on `?p=1`; its own text appears on `?p=2` |
+| Imported file translated | controlled | `导入的字幕第一句。` → `Der erste Satz der importierten Untertitel.` |
+| Layout in a viewport-sized container | controlled | the overlay stays inside the player and keeps rendering |
+| The extension on the site it was built for | real YouTube video | overlay attached to `#movie_player`, `ytp-button` toggle inside `.ytp-right-controls`, `ytds-active` |
+
+**Not observed, and not claimed.** Entering real fullscreen could not be
+exercised in the headless browser used for the check (`document.fullscreenElement`
+stayed empty), so what is verified there is the guarantee fullscreen rests on —
+the overlay is a child of the player and stays inside it when the container
+grows to the whole viewport — not the browser's fullscreen transition itself.
+A seek issued while the player is paused did not visibly take effect in that
+browser. Also unverified: the waiting/`need_login` path against a signed-in
+session, and restoring the site's own caption layer on the live page. YouTube's
+caption text was not observed in the same headless run (the player offered no
+captions there); its caption, timing and display paths are covered by the source
+suite instead.
