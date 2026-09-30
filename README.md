@@ -23,7 +23,7 @@ Original captions, translations, word lookup, and sentence practice — right on
 
 ![Original German captions and Chinese translation displayed together, above the player controls](docs/images/bilingual-subtitles.png)
 
-*Actual v3.8.1 extension interface with an illustrated demo scene and sample captions. A video needs available YouTube captions; translation availability depends on the provider.*
+*Example UI captured from v3.8.1, retained to illustrate the interface rather than the current source version. A video needs available YouTube captions; translation availability depends on the provider.*
 
 ## Make every caption useful
 
