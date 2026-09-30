@@ -208,7 +208,9 @@ Try **Fast display**. It prepares upcoming sentences while the video plays. A sl
 <details>
 <summary><strong>Does it read subtitles burned into the video?</strong></summary>
 
-No. It uses YouTube's caption data, Bilibili's caption data, or visible native-caption text. It does not perform OCR or speech recognition, and cannot remove captions embedded in the video pixels. On Bilibili, Chinese text painted into the picture is not a caption track — import an SRT file instead.
+No. It uses YouTube's caption data, Bilibili's caption data, or visible native-caption text. It never looks at the video pixels: there is no OCR, and captions embedded in the picture cannot be removed. On Bilibili, Chinese text painted into the picture is not a caption track — import an SRT file instead.
+
+When a video has no caption track at all, **on-device speech recognition** can create one from the audio instead. It reads the tab's sound rather than the picture, runs through a bridge on your own computer with nothing uploaded, and must be started by hand per video. See [Speech recognition for videos without captions](docs/BILIBILI.md#speech-recognition-for-videos-without-captions).
 
 </details>
 
