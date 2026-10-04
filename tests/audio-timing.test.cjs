@@ -31,6 +31,7 @@ test('changed text/windows, weak confidence, incomplete words and overlapping au
     { ...segment(), dur: 4100 },
     { ...segment(), words: segment().words.slice(0, 2) },
     { ...segment(), words: segment().words.map(w => ({ ...w, score: .01 })) },
+    { ...segment(), words: segment().words.map(w => ({ ...w, score: .20 })) },
     { ...segment(), words: segment().words.map((w, i) => ({ ...w, e: i === 0 ? 1500 : w.e })) },
     { ...segment(), words: segment().words.map((w, i) => ({ ...w, e: i === 2 ? 5000 : w.e })) }
   ];

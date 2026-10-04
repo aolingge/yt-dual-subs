@@ -18,6 +18,9 @@
   const extensionFetchUrls = new Set();
   const ORIGINAL_TIMEOUT_MS = 8000;
   const TRANSLATION_TIMEOUT_MS = 5000;
+  const MAX_MESSAGE_CHARS = 4 * 1024 * 1024;
+  const MAX_TIMEDTEXT_BODY_CHARS = 4 * 1024 * 1024;
+  const ALLOWED_YOUTUBE_HOST_RE = /(^|\.)youtube\.com$/i;
   const timingTrackCache = new Map(); // bounded, document memory only
   const SOURCE_RETRY_MS = [750, 2000, 5000];
   let sourceRetryTimer = null;
@@ -59,6 +62,7 @@
   // Monotonic request token echoed back to content.js so it can drop any
   // 'cues'/'nocues' that does not correspond to its latest sendConfig().
   let reqNonce = 0;
+  let sessionToken = "";
 
   // ---- helpers -------------------------------------------------------------
   function videoIdFromLocation() {
@@ -86,7 +90,12 @@
   }
 
   function isTimedtext(url) {
-    return typeof url === "string" && url.indexOf(TIMEDTEXT_MARK) !== -1;
+    if (typeof url !== "string" || !url) return false;
+    try {
+      const u = new URL(url, location.href);
+      return u.protocol === "https:" && ALLOWED_YOUTUBE_HOST_RE.test(u.hostname || "") &&
+        u.pathname === TIMEDTEXT_MARK;
+    } catch (_e) { return false; }
   }
 
   // Track identity ignoring the params that rotate or that WE vary. "pot" (the
@@ -194,9 +203,13 @@
       const res = await pageFetch(url, { method: "GET", credentials: "include",
         signal: controller ? controller.signal : undefined });
       if (!res.ok) throw new Error("timedtext http " + res.status);
+      const length = Number(res.headers && typeof res.headers.get === "function"
+        ? res.headers.get("content-length") : 0);
+      if (length > MAX_TIMEDTEXT_BODY_CHARS) throw new Error("timedtext body too large");
       const txt = await res.text();
       if (!txt) throw new Error("timedtext empty body");
-      return JSON.parse(txt);
+      if (txt.length > MAX_TIMEDTEXT_BODY_CHARS) throw new Error("timedtext body too large");
+      return parseCaptionBody(txt);
     })();
     try { return await Promise.race([request, deadline]); }
     finally { clearTimeout(timer); }
@@ -205,10 +218,13 @@
   // ---- bridge to content.js ------------------------------------------------
   function post(type, extra) {
     try {
-      window.postMessage(Object.assign(
+      const payload = Object.assign(
         { source: "ytds-inject", type, videoId: currentVideoId, nonce: reqNonce },
         extra || {}
-      ), "*");
+      );
+      if (sessionToken) payload.sessionToken = sessionToken;
+      if (JSON.stringify(payload).length > MAX_MESSAGE_CHARS) return;
+      window.postMessage(payload, "*");
     } catch (_e) { /* never throw */ }
   }
 
@@ -237,10 +253,7 @@
 
   // Observe a successful player response without consuming its body. Native
   // XML and JSON3 captions feed the same parser and retain their word times.
-  function captureOriginalBody(url, body) {
-    try {
-      if (!isTimedtext(url) || hasTlang(url) || vidOfUrl(url) !== currentVideoId ||
-          normKey(url) !== sourceKey) return;
+  function parseCaptionBody(body) {
       let json = body;
       if (typeof body === "string") {
         if (body.trim().startsWith("<") && typeof DOMParser === "function") {
@@ -258,6 +271,14 @@
           }) };
         } else json = JSON.parse(body);
       }
+      return json;
+  }
+
+  function captureOriginalBody(url, body) {
+    try {
+      if (!isTimedtext(url) || hasTlang(url) || vidOfUrl(url) !== currentVideoId ||
+          normKey(url) !== sourceKey) return;
+      const json = parseCaptionBody(body);
       if (!parseJson3(json).length) return;
       const alreadyLoaded = originalCache?.key === sourceKey;
       originalCache = { key: sourceKey, videoId: currentVideoId, json };
@@ -287,7 +308,15 @@
     const request = { url: fetchUrl, videoId };
     originalRequest = request;
     request.promise = Promise.race([captured,
-      fetchJson3(fetchUrl, ORIGINAL_TIMEOUT_MS, controller)]).finally(() => {
+      fetchJson3(fetchUrl, ORIGINAL_TIMEOUT_MS, controller).catch(error => {
+        // Some native signed requests work only in their original format.
+        // Retry exactly the observed URL once, without logging its signature.
+        if (!sourceSpeculative && fetchUrl !== url && /empty body/.test(String(error)) &&
+            videoId === currentVideoId && key === sourceKey) {
+          return fetchJson3(url, ORIGINAL_TIMEOUT_MS, controller);
+        }
+        throw error;
+      })]).finally(() => {
       originalWaiters.delete(waiter);
       controller?.abort(); // a captured body makes the duplicate unnecessary
       if (originalRequest === request) originalRequest = null;
@@ -677,7 +706,17 @@
       if (vid !== currentVideoId) return;
       if (nonceAtArm !== reqNonce) return;
       if (!sourceUrl) {
-        post("nocues");
+        let confirmedAbsent = false;
+        try {
+          const player = playerEl();
+          const response = typeof player?.getPlayerResponse === "function"
+            ? player.getPlayerResponse() : window.ytInitialPlayerResponse;
+          const tracks = response?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+          confirmedAbsent = response?.videoDetails?.videoId === vid &&
+            response?.playabilityStatus?.status === "OK" && !trackEntries().length &&
+            (tracks === undefined || (Array.isArray(tracks) && tracks.length === 0));
+        } catch (_e) { /* missing page metadata remains unknown */ }
+        post("nocues", confirmedAbsent ? { reason: "no_track" } : {});
         scheduleSourceRetry();
       }
     }, 6000);
@@ -689,8 +728,22 @@
       if (evt.source !== window) return;
       const d = evt.data;
       if (!d || d.source !== "ytds-content") return;
+      if (typeof d !== "object" || JSON.stringify(d).length > 64 * 1024) return;
+      if (sessionToken && d.sessionToken !== sessionToken) return;
+      if (d.type === "hello") {
+        post("ready");
+        return;
+      }
+      if (d.type !== "export-request" && (!Number.isSafeInteger(d.nonce) || d.nonce < 0)) return;
 
       if (d.type === "config") {
+        if (typeof d.targetLang !== "string" || d.targetLang.length > 32 ||
+            (d.useTlang !== undefined && typeof d.useTlang !== "boolean") ||
+            (d.useWordTiming !== undefined && typeof d.useWordTiming !== "boolean") ||
+            (d.useAutoMatch !== undefined && typeof d.useAutoMatch !== "boolean")) return;
+        if (typeof d.sessionToken === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(d.sessionToken)) {
+          sessionToken = d.sessionToken;
+        }
         // Treat the config message as the authoritative nav signal: reset any
         // stale capture synchronously if the location video changed, rather
         // than waiting up to 500ms for the poll. This closes the cross-video
@@ -719,12 +772,16 @@
           seedSourceSoon();             // ...but try to start earlier (B1)
         }
       } else if (d.type === "word-timing-config") {
+        if (d.useWordTiming !== undefined && typeof d.useWordTiming !== "boolean") return;
+        if (d.useAutoMatch !== undefined && typeof d.useAutoMatch !== "boolean") return;
         // Turning highlighting off needs no refetch of the original/translation.
         if (cfg) {
           cfg.useWordTiming = !!d.useWordTiming;
           cfg.useAutoMatch = d.useAutoMatch !== false;
         }
       } else if (d.type === "export-request") {
+        if (typeof d.exportId !== "string" && typeof d.exportId !== "number") return;
+        if (String(d.exportId).length > 128 || typeof d.targetLang !== "string" || d.targetLang.length > 32) return;
         // On-demand SRT export: build a COMPLETE bilingual cue set regardless of
         // the live backend mode (see produceExport). Correlated by exportId.
         // Sync video state first so a just-navigated tab can't export the

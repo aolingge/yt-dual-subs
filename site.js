@@ -38,8 +38,18 @@
   // one, because the popup runs on the extension origin — where this file's own
   // host detection says nothing about the tab being looked at — and still has to
   // read and write the settings of the right site.
-  const SITE_KEY_ALIAS = { bilibili: { targetLang: "bbTargetLang", order: "bbOrder" } };
-  const SITE_OVERRIDES = { bilibili: { targetLang: "de", order: "trans-top" } };
+  const SITE_KEY_ALIAS = { bilibili: { enabled: "bbEnabled", targetLang: "bbTargetLang", order: "bbOrder" } };
+  const SITE_OVERRIDES = { bilibili: {
+    enabled: true, targetLang: "de", order: "trans-top", bbGermanLayoutV1: false
+  } };
+
+  // Restore the requested Chinese -> German layout once for existing installs.
+  // Afterwards language and order remain editable, just like YouTube's settings.
+  // Both the content script and popup use this repair before their first paint.
+  function repairSettingsFor(p, saved) {
+    if (p !== "bilibili" || saved.bbGermanLayoutV1) return {};
+    return { targetLang: "de", order: "trans-top", bbGermanLayoutV1: true };
+  }
 
   function aliasFor(p) { return SITE_KEY_ALIAS[p] || {}; }
   function unaliasFor(p) {
@@ -175,6 +185,7 @@
     fromStore,
     logicalChanges,
     storageKey,
+    repairSettings: (saved) => repairSettingsFor(platform, saved),
 
     videoKey() {
       return isBilibili ? bilibiliVideoKey() : youtubeVideoKey();
@@ -206,19 +217,12 @@
              document.querySelector(".bpx-player-container") || player;
     },
 
-    // Where the in-player on/off button goes. On Bilibili the control bar's
-    // button group is built by a lazily loaded chunk whose class names are not
-    // in the verified bundle, so appending into .bpx-player-control-wrap could
-    // alter the native bar's layout and disturb the danmaku switch or the
-    // progress bar. The button therefore goes into .bpx-player-container —
-    // verified present, already a positioning context — and content.css places
-    // it in the video's empty top-right corner.
+    // Use the native right-hand button group on both sites. Bilibili builds it
+    // lazily; content.js watches for its arrival and for player rebuilds.
     controlsHost(player) {
       if (!isBilibili) return player && player.querySelector(".ytp-right-controls");
       const scope = player || bilibiliPlayer();
-      return (scope && scope.classList && scope.classList.contains("bpx-player-container")
-        ? scope : null) ||
-        document.querySelector(".bpx-player-container");
+      return scope && scope.querySelector(".bpx-player-control-bottom-right");
     },
 
     toggleButtonClass() {
@@ -349,7 +353,8 @@
       toStore: (patch) => toStoreFor(name, patch),
       fromStore: (record) => fromStoreFor(name, record),
       logicalChanges: (changes) => logicalChangesFor(name, changes),
-      storageKey: (logical) => storageKeyFor(name, logical)
+      storageKey: (logical) => storageKeyFor(name, logical),
+      repairSettings: (saved) => repairSettingsFor(name, saved)
     };
   };
   // Which platform a tab URL belongs to (the popup's only source of truth).
@@ -358,5 +363,16 @@
       const host = new URL(String(url || "")).hostname.replace(/^www\./, "");
       return /(^|\.)bilibili\.com$/.test(host) ? "bilibili" : "youtube";
     } catch (_e) { return "youtube"; }
+  };
+
+  // Platform and page type are separate: the popup may need Bilibili's settings
+  // on any Bilibili tab, but its video controls only make sense on watch pages.
+  globalThis.YtdsSite.isBilibiliVideoUrl = (url) => {
+    try {
+      const parsed = new URL(String(url || ""));
+      const host = parsed.hostname.replace(/^www\./, "");
+      return /(^|\.)bilibili\.com$/.test(host) &&
+        /^(?:\/video\/(?:BV[0-9A-Za-z]+|av\d+))(?:\/|$)/i.test(parsed.pathname);
+    } catch (_e) { return false; }
   };
 })();

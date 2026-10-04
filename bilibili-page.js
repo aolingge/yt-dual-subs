@@ -26,6 +26,11 @@
   const META_JSON_RE = /\/x\/player\/(?:wbi\/)?v2\b/;
   const META_PB_RE = /\/x\/v2\/subtitle\/web\/view\b/;
   const CUE_HINT_RE = /subtitle/i;
+  const MAX_MESSAGE_CHARS = 4 * 1024 * 1024;
+  const MAX_SUBTITLE_BODY_CHARS = 4 * 1024 * 1024;
+  const REQUEST_TIMEOUT_MS = 8000;
+  const BILIBILI_API_HOST = "api.bilibili.com";
+  const ALLOWED_SUBTITLE_HOST_RE = /^(?:(?:aisubtitle|subtitle|i\d+)\.hdslb\.com|(?:[a-z0-9-]+\.)?bilivideo\.(?:com|cn))$/i;
 
   // ---- state ---------------------------------------------------------------
   let config = null;              // last {config} message from content.js
@@ -46,6 +51,14 @@
   let retryStep = 0;
   let seq = 0;                    // monotonic: lets a stale reply lose
   let evalToken = 0;              // the newest evaluation owns the page state
+  let sessionToken = "";         // optional content/page handshake token
+  let resourceObserver = null;
+  const resourceSeen = new Set();
+  const RESOURCE_SEEN_MAX = 512;
+
+  function safeMessageSize(value) {
+    try { return JSON.stringify(value).length; } catch (_e) { return Infinity; }
+  }
 
   // ---- video identity (MUST match site.js videoKey exactly) ----------------
   function videoKey() {
@@ -79,6 +92,8 @@
     aid = null; cid = null;
     metaAnswered = false; tracks = []; playerChosenLan = "";
     cueCache.clear(); pendingUrls.clear(); postedSig = ""; postedTracksSig = "";
+    if (resourceObserver) { try { resourceObserver.disconnect(); } catch (_e) {} resourceObserver = null; }
+    resourceSeen.clear();
     retryStep = 0;
     evalToken++;                  // cancel whatever the previous part was doing
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
@@ -183,9 +198,22 @@
       const rest = decoded.split(prefix)[1];
       if (!rest) continue;
       const query = url.indexOf("?") >= 0 ? url.slice(url.indexOf("?") + 1) : "";
-      return "//aisubtitle.hdslb.com" + rest + (query ? "?" + query : "");
+      return "https://aisubtitle.hdslb.com" + rest + (query ? "?" + query : "");
     }
     return url;
+  }
+
+  function subtitleUrlOf(raw) {
+    try {
+      const u = new URL(String(raw || ""), location.href);
+      const host = String(u.hostname || "").toLowerCase();
+      if (u.protocol !== "https:" || !ALLOWED_SUBTITLE_HOST_RE.test(host)) return "";
+      if (!CUE_HINT_RE.test(u.pathname || "") && !/subtitle/i.test(u.hostname || "")) return "";
+      // Keep the page-relative spelling used by Bilibili's player. On the
+      // HTTPS watch page the browser resolves this to HTTPS; host validation
+      // above still prevents a remote or non-Bilibili destination.
+      return "//" + u.host + u.pathname + u.search;
+    } catch (_e) { return ""; }
   }
 
   // ---- track normalization / selection ------------------------------------
@@ -200,7 +228,7 @@
       id: String(t.id_str || t.idStr || t.id || ""),
       lan: String(t.lan || ""),
       lanDoc: String(t.lan_doc || t.lanDoc || ""),
-      url: decodeSubtitleUrl(t.subtitle_url || t.subtitleUrl || ""),
+      url: subtitleUrlOf(decodeSubtitleUrl(t.subtitle_url || t.subtitleUrl || "")),
       type: num(t.type, 0),                 // 0 = CC (human), 1 = AI
       aiType: num(t.ai_type !== undefined ? t.ai_type : t.aiType, 0),
       aiStatus: num(t.ai_status !== undefined ? t.ai_status : t.aiStatus, 0),
@@ -357,7 +385,12 @@
 
   // ---- posting to content.js ----------------------------------------------
   function post(message) {
-    try { window.postMessage({ source: "ytds-inject", ...message }, "*"); }
+    try {
+      const payload = { source: "ytds-inject", ...message };
+      if (sessionToken) payload.sessionToken = sessionToken;
+      if (safeMessageSize(payload) > MAX_MESSAGE_CHARS) return;
+      window.postMessage(payload, "*");
+    }
     catch (_e) { /* the page is going away */ }
   }
 
@@ -502,20 +535,50 @@
     } catch (_e) { return ""; }
   }
 
+  function isAllowedSubtitleUrl(url) {
+    try {
+      const u = new URL(String(url || ""), location.href);
+      return u.protocol === "https:" && ALLOWED_SUBTITLE_HOST_RE.test(String(u.hostname || "")) &&
+        (CUE_HINT_RE.test(u.pathname || "") || /subtitle/i.test(u.hostname || ""));
+    } catch (_e) { return false; }
+  }
+
   function credentialMode(url) {
     // The Bilibili API needs the page's own session; the caption CDN must NOT
     // be asked for credentials or the cross-origin request is rejected.
-    return /(^|\.)bilibili\.com$/i.test(hostOf(url)) ? "include" : "omit";
+    return hostOf(url).toLowerCase() === BILIBILI_API_HOST ? "include" : "omit";
   }
 
   async function requestText(url) {
     if (!ORIGINAL_FETCH) throw new Error("no fetch");
-    const res = await ORIGINAL_FETCH(url, {
-      credentials: credentialMode(url),
-      headers: { Accept: "application/json, text/plain, */*" }
-    });
-    if (!res || !res.ok) throw new Error("subtitle http " + (res ? res.status : "?"));
-    return res.text();
+    let safeUrl = subtitleUrlOf(url);
+    let isApi = false;
+    try {
+      const parsed = new URL(String(url || ""), location.href);
+      const host = String(parsed.hostname || "");
+      isApi = parsed.protocol === "https:" && host.toLowerCase() === BILIBILI_API_HOST &&
+        /^\/x\/(?:player\/wbi\/v2|v2\/subtitle\/web\/view)\b/.test(parsed.pathname);
+      if (!safeUrl && isApi) safeUrl = parsed.toString();
+    } catch (_e) { /* rejected below */ }
+    if (!safeUrl) throw new Error("subtitle url refused");
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS) : null;
+    try {
+      const res = await ORIGINAL_FETCH(safeUrl, {
+        credentials: isApi ? "include" : credentialMode(safeUrl),
+        headers: { Accept: "application/json, text/plain, */*" },
+        signal: controller ? controller.signal : undefined
+      });
+      if (!res || !res.ok) throw new Error("subtitle http " + (res ? res.status : "?"));
+      const length = Number(res.headers && typeof res.headers.get === "function"
+        ? res.headers.get("content-length") : 0);
+      if (length > MAX_SUBTITLE_BODY_CHARS) throw new Error("subtitle body too large");
+      const text = await res.text();
+      if (typeof text !== "string" || text.length > MAX_SUBTITLE_BODY_CHARS) {
+        throw new Error("subtitle body too large");
+      }
+      return text;
+    } finally { if (timer) clearTimeout(timer); }
   }
 
   async function fetchCuesFor(track) {
@@ -656,7 +719,9 @@
   }
 
   function isInterestingUrl(url) {
-    return META_JSON_RE.test(url) || META_PB_RE.test(url) || CUE_HINT_RE.test(url);
+    const host = hostOf(url);
+    if (host.toLowerCase() === BILIBILI_API_HOST && (META_JSON_RE.test(url) || META_PB_RE.test(url))) return true;
+    return isAllowedSubtitleUrl(url);
   }
 
   // ---- network hooks ------------------------------------------------------
@@ -743,21 +808,24 @@
   // not hook. The resource timing entry still names the URL, so we can replay
   // the same public request ourselves.
   function installResourceObserver() {
-    if (typeof PerformanceObserver === "undefined") return;
+    if (typeof PerformanceObserver === "undefined" || resourceObserver) return;
     try {
-      const seen = new Set();
-      const observer = new PerformanceObserver((list) => {
+      resourceObserver = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
           const url = entry && entry.name;
-          if (!url || seen.has(url) || !CUE_HINT_RE.test(url)) continue;
-          seen.add(url);
+          if (!url || resourceSeen.has(url) || !isAllowedSubtitleUrl(url)) continue;
+          resourceSeen.add(url);
+          while (resourceSeen.size > RESOURCE_SEEN_MAX) resourceSeen.delete(resourceSeen.values().next().value);
           if (!tracks.some((t) => t.url === url)) continue;   // only known tracks
           if (cueCache.has(url)) continue;
           requestText(url).then((text) => handleCueBody(url, text), () => {});
         }
       });
-      observer.observe({ type: "resource", buffered: true });
-    } catch (_e) { /* unsupported: the XHR/fetch hooks still cover the normal path */ }
+      resourceObserver.observe({ type: "resource", buffered: true });
+    } catch (_e) {
+      resourceObserver = null;
+      /* unsupported: the XHR/fetch hooks still cover the normal path */
+    }
   }
 
   // ---- messages from content.js -------------------------------------------
@@ -765,8 +833,16 @@
     if (evt.source !== window) return;
     const d = evt.data;
     if (!d || d.source !== "ytds-content") return;
+    if (!d || typeof d !== "object" || safeMessageSize(d) > MAX_MESSAGE_CHARS) return;
+    if (sessionToken && d.sessionToken !== sessionToken) return;
+    if (d.type !== "export-request" && (!Number.isSafeInteger(d.nonce) || d.nonce < 0)) return;
 
     if (d.type === "config") {
+      if (typeof d.targetLang !== "string" || d.targetLang.length > 32 ||
+          typeof d.trackId !== "string" || d.trackId.length > 256) return;
+      if (typeof d.sessionToken === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(d.sessionToken)) {
+        sessionToken = d.sessionToken;
+      }
       config = {
         targetLang: String(d.targetLang || ""),
         trackId: d.trackId ? String(d.trackId) : ""
@@ -780,6 +856,8 @@
     }
 
     if (d.type === "export-request") {
+      if (typeof d.exportId !== "string" || d.exportId.length > 128 ||
+          typeof d.targetLang !== "string" || d.targetLang.length > 32) return;
       // The extension holds the translations; we only supply the original cues.
       const track = selectTrack();
       const cues = track ? cueCache.get(track.url) : null;

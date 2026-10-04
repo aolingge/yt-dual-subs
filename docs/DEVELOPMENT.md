@@ -25,6 +25,8 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 | `audio-cache.js` | Bounded local cache of audio-derived word times, keyed by video id, source language, caption-track hash, model/helper version, audio start offset and — for an imported file — the audio's own identity (byte size plus the SHA-256 of its first 4 MiB). Only a result the helper marked complete counts as a hit. Loaded only by the worker. |
 | `alignment.html`, `alignment.js`, `alignment.css` | Optional analysis page: starts a local-helper job, imports a matching local media file together with its video start time, shows progress and failures, and cancels jobs whose video or track changed. |
 | `tools/audio-alignment/`, `tools/Start-AudioAlignment.*`, `tools/Stop-AudioAlignment.ps1` | Optional Python helper (loopback HTTP, anonymous audio download, FFmpeg decoding, Wav2Vec2 CTC alignment, disk cache) plus install/start/stop scripts. Not needed for captions. |
+| `bridge-vault.js` | Worker-only extension-origin IndexedDB credential storage; commit migration before clearing legacy local/sync copies. |
+| `study-store.js`, `study-export.js` | Serialized library operations, shared card validation and escaped Anki TSV generation. |
 | `settings.js` | Shared preference reads/live changes and durable local staging; the existing worker merges sync writes with quota backoff. |
 | `content.js` | Video-clock caption rendering, sentence grouping, native-caption fallback, word lookup, drag/resize, player controls, and study messages. |
 | `background.js` | Google translation requests, deduplication, caching, deadlines, preference-save messages, and shortcut dispatch. |
@@ -33,7 +35,7 @@ Use an isolated browser profile for automated checks. Keep personal browser prof
 | `media-clock.js` | The join between the tab's continuous audio stream and the page's own clock. `video.currentTime` is the authority: a snapshot is the page saying where the media was, between snapshots the position is carried forward at the playback rate the page also reported, and a snapshot that contradicts the carried value replaces it. The mapping is declared unreliable rather than silently wrong when the snapshots stop agreeing. |
 | `offscreen.html`, `offscreen.js`, `pcm-worklet.js` | Tab-audio capture. Capturing a tab takes its sound out of the speakers, so the graph plays the stream back through an `AudioContext` of its own while a worklet taps the same signal. It lives in an offscreen document because a graph hosted by the popup would stop the moment the popup closed and a service worker has no Web Audio. The worklet only downmixes to mono 16-bit little-endian PCM every `FLUSH_MS`, outputs silence to keep the two paths from mixing, and does not resample — the recognizer resamples from the context's own rate. |
 | `popup.html`, `popup.css`, `popup.js` | Settings, preview, status, current-video actions, SRT export, the Bilibili track/import card, and the on-device recognition card. |
-| `study.js` | Transcript browsing, saved cards, review, and JSON backup/import. |
+| `study.js`, `study-export.js` | Transcript browsing, saved cards, review, JSON backup/import, platform/part time links, and Anki TSV export. |
 | `content.css` | Subtitle layout, lookup card, resize grips, and native-caption suppression. |
 | `_locales/` | English, Simplified Chinese, and Traditional Chinese interface strings, including the Bilibili card labels, status reasons and track tags. |
 | `tests/` | Node's built-in test runner and a `node:vm` browser/extension harness. `bilibili-harness.cjs` boots the shipping `site.js` and `bilibili-page.js` in isolated and page worlds so the real reader can be driven with controlled network answers. |
@@ -83,7 +85,7 @@ Chromium can skip the second injection of the same script URL at one injection s
 - **Timing sources stay distinguishable:** a sentence mixing sourced and estimated times must report that mix (never a full match), keep the per-word flags through grouping and cache merges, and let the popup name the source. The mode setting is the only switch that decides whether another caption track is fetched or audio results are accepted; approximate mode must remain fully usable with no helper running.
 - **Audio results are bound, not inherited:** never apply a record whose position, video id, source language, caption-track hash, model/version, audio identity or audio start offset differs from the loaded track, and never accept one in an older result format. Report that state instead of silently ignoring it, and cancel the running job when the video or track changes. A helper failure or absence must leave captions, highlighting and translation intact.
 - **Local pace is cached, not recomputed:** measure the pace once per caption track (invalidated by a new cue list, and by word times arriving for cues that were untimed when it was measured) rather than scanning the whole track on every render tick.
-- **Per-site settings never leak:** Bilibili stores its target language and line order under `bbTargetLang`/`bbOrder` and its manual track pick under `bbTrackId`. YouTube keeps the original key names so existing settings need no migration. Changing one site must never read or write the other's values, and no upgrade may reset saved preferences.
+- **Per-site settings never leak:** Bilibili stores enable state under `bbEnabled`, target language and line order under `bbTargetLang`/`bbOrder`, and its manual track pick under `bbTrackId`. YouTube keeps the original key names. A shared adapter repair restores the requested German-above-Chinese Bilibili layout once (`bbGermanLayoutV1`); later preferences survive. The popup and player toggle write the same Bilibili-only enable key. The player toggle lives in `.bpx-player-control-bottom-right` and is restored when that group is built or replaced.
 - **Line identity follows the language direction, not the position:** whatever order is configured, the top/bottom position never changes which line is the translation and which is the original. Copy, export, study cards and word lookup keep that direction, so a word on the German line is looked up German → Chinese.
 - **The position of the two lines is a display choice only:** German above / Chinese below is the position rule for Bilibili; it must not be hard-coded into code that assumes "the first line is the original".
 - **An imported subtitle file outranks the page:** while a file is bound to the current video and part, the reader's cues are ignored, the binding key includes the part, and the file is removed only by an explicit unbind. Imported and page captions must never be mixed.
@@ -94,7 +96,32 @@ Chromium can skip the second injection of the same script URL at one injection s
 - **Captured audio goes nowhere but the configured local bridge:** the address and token come from the popup, the extension itself calls no cloud service, and a language the recognizer already speaks is not translated again.
 - **Recognized captions are timed from the media position, never from the model's own clock:** audio is held until the page reports where the video is, a revision counter lets a sentence be corrected in place rather than appended twice, a seek or rate change rebases the timeline and drops captions measured before the jump, and a video or part change ends the session.
 
+## Study and service lifecycle
+
+Saved-card mutations run through the worker's serialized queue and read the current collection inside each operation. The persistent study page pins its video tab in `studyTab`, rather than following whichever tab is active later. Optional `autoPause` and repeat use raw media time; the visual caption offset does not change where a sentence ends. Hidden-video timing remains active only for those enabled study actions.
+
+Translation requests share at most four active requests and a bounded 64-request queue, with in-flight deduplication and a 429 cooldown. Empty/malformed results are not cached. The free GTX endpoint remains unofficial; worker restart resets its in-memory cooldown. Capture creates the offscreen document before requesting the short-lived stream ID, rechecks caption absence, authenticates senders, cleans failed startup, and restores active offscreen state after worker reactivation.
+
 ## Run focused checks
+
+Bridge tokens use extension-origin IndexedDB through worker-only `bridge-vault.js`,
+never local or sync preference queues. Startup migrates legacy copies after
+committing the private value. An explicitly empty private value wins over legacy
+tokens. Content defaults and status replies omit the token; sender checks deny
+content-script requests for credential reads or capture start/stop. The public health route checks reachability, protocol and model
+readiness; authentication happens when the user starts recognition. The popup
+requests optional host access from the connection button. Only HTTP/HTTPS on
+`127.0.0.1` or `localhost`, without URL credentials, paths or queries, is accepted;
+redirects are refused and IPv6 is not supported.
+
+`node tools/verify-study-security.mjs` checks the real masked input, private token
+writes and isolation, HTTP health fetch, caption gates, TSV download, Bilibili backup import,
+persistent study-page binding and silent media-clock sentence-end pause
+in a fresh muted Edge. The host-permission dialog is replaced by a fixture;
+the runner uses synthetic credentials/cards and starts no ASR capture.
+
+For recognition timing fixes, configuration tradeoffs and the distinction between
+regression checks and measured model accuracy, see [ACCURACY.md](ACCURACY.md).
 
 With a Node.js installation that supports its built-in test runner:
 
@@ -128,6 +155,20 @@ YTDS_SHOT=docs/images/bilibili-dual-subtitles.png node tools/verify-bilibili.mjs
 
 Useful overrides: `YTDS_VIDEO`, `YTDS_EDGE`, `YTDS_EXT`, `YTDS_PROFILE`, `YTDS_CDP_PORT`, `YTDS_REPORT`.
 
+**Quiet browser tests:** All project Edge test launchers default to `--mute-audio`,
+including headless runs and restored sessions. This silences only the isolated
+test browser's output while media decoding and playback timing remain available.
+Node browser reports record `audioOutput: "muted"`. Do not change the workstation
+volume or the user's normal browser. Only for an explicitly authorized audible
+check, set `YTDS_TEST_AUDIO=1` for either Node runner, or pass `-AllowTestAudio` to
+`tools/Start-EdgeRecovery.ps1`.
+
+**默认静音测试：**所有项目 Edge 测试启动工具默认使用 `--mute-audio`，
+包括无界面运行及会话恢复。只关闭隔离测试浏览器的声音输出，媒体解码和播放时间仍可用。
+Node 浏览器报告记录 `audioOutput: "muted"`。不要调整电脑音量或用户的日常浏览器。
+只有用户明确要求有声验证时，才为 Node 工具设置 `YTDS_TEST_AUDIO=1`，
+或给 `tools/Start-EdgeRecovery.ps1` 添加 `-AllowTestAudio`。
+
 The optional helper's own checks need no model download, account, or audio file:
 
 ```sh
@@ -151,3 +192,11 @@ Most images in `docs/images/` use the real v3.8.1 interface with an original ill
 ## Submit a change
 
 Keep changes focused, include a reproduction for bugs, update all three interface locales when adding labels, and check the behavior affected by your patch. Preserve the MIT license and original attribution. Update download links, version badges, screenshots, and release notes when they become outdated.
+
+Before a release, run `node tools/check-extension.mjs` and `node --test tests/*.test.cjs`. The structure check validates the manifest, locale coverage, page/isolated timing copies, and current documentation version. The browser gate must also cover a real YouTube page and a real Bilibili page in an isolated Edge or Chrome profile. Record the result for fullscreen entry/exit, paused seek, SPA video and part changes, native-caption restoration, signed-in `need_login`, network timeout/429, and extension reload. A controlled fixture is useful for regression tests but does not prove live caption availability.
+
+## 3.12.3 settings and review checks
+
+Chinese usage: `docs/RECOGNITION_SETTINGS.md`. Companion protocol: authenticated `/v1/settings` and `/v1/session/{id}/retry`; model paths are server-registered. No additional extension permissions are needed.
+
+`node tools/verify-live-completion.mjs` tests actual muted tabCapture and checks PCM amplitude. `--decoded-fixture` replaces its input with a decoded public recording to isolate downstream AudioWorklet/model/UI checks; it must be reported separately. On the current machine actual muted headless tabCapture returned zero, while decoded input completed. The test requires the existing local companion environment and recorded fixtures; it does not use the user's browser profile or system volume.

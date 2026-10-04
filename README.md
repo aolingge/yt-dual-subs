@@ -15,7 +15,7 @@ Original captions, translations, word lookup, and sentence practice — right on
 </p>
 
 <p align="center">
-  <img alt="Source version 3.12.0" src="https://img.shields.io/badge/source-3.12.0-3ea6ff" />
+  <img alt="Source version 3.12.6" src="https://img.shields.io/badge/source-3.12.6-3ea6ff" />
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Desktop Chrome and Edge" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="No API key required" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -44,8 +44,13 @@ Original captions, translations, word lookup, and sentence practice — right on
 On a [Bilibili](https://www.bilibili.com) video page the extension shows the
 **German translation on the top line** and the **Chinese original on the bottom
 line**, both from the same caption segment and both following the video clock.
-Your YouTube target language and line order are stored separately, so switching
+Your YouTube enable state, target language and line order are stored separately, so switching
 Bilibili to German leaves them untouched.
+
+Use **在 B 站启用双语字幕** in the popup's Bilibili card, or click the small
+subtitle icon in the player's bottom-right control bar, to show or hide the
+overlay. Both controls remember the same Bilibili-only setting. Existing
+Bilibili installations restore German above Chinese once after this fix.
 
 Bilibili's default here is Chinese → **German**, translation on top. This works
 on ordinary submitted videos (`bilibili.com/video/…`), including multi-part
@@ -103,7 +108,7 @@ In **Study → Word highlight style**, adjust the background color, highlighted 
 
 *Actual v3.9.1 interface using controlled caption timestamps and a demo video. This illustrates the feature, not measured alignment to German speech.*
 
-This works across supported caption languages and needs no API key or setup per video. Videos must provide usable captions. Even automatic-caption timestamps can be imperfect; approximate progress is a reading aid, not precise speech alignment. The extension never invents captions, so a video without a caption track still has nothing to show.
+This works across supported caption languages and needs no API key or setup per video. The normal subtitle path requires usable captions. Even automatic-caption timestamps can be imperfect; approximate progress is a reading aid, not precise speech alignment. For videos confirmed to have no readable caption track, optional on-device speech recognition can generate captions after an explicit start.
 
 When no reliable caption word times exist, **Audio-aligned highlighting** can measure them from the video's audio instead. Choose it in the popup's study card to open its own page, which reports what is already cached and what remains. It uses a separate local helper that you start yourself and supports German and English; the first analysis downloads a model (about 360 MB per language) and later videos reuse it. Results stay on your computer, so reopening a video keeps the highlight, and measured times are labeled in the video. A stored result belongs to the exact track, sentence and audio it was measured from, so editing the captions, replacing an imported audio file or changing its start time means those sentences are measured again rather than reused. Caption word times always win over measured ones. Setup and limits: [docs/AUDIO_ALIGNMENT.md](docs/AUDIO_ALIGNMENT.md).
 
@@ -131,7 +136,7 @@ For **desktop Chrome and Microsoft Edge**. Installation currently uses **Load un
 
 **Updating:** replace the extension files in the same folder, reload its card on the extensions page, then **refresh existing YouTube and Bilibili tabs**. Saved sentences stay in extension-local storage; [export a JSON backup](#privacy-and-your-data) before uninstalling.
 
-The current source is **3.12.0**, adding Bilibili support: Chinese caption reading with the German translation above the Chinese original, a per-site target language and line order that leave your YouTube settings alone, local SRT import bound to a video and part, and a popup section that reports the real caption state instead of a permanent spinner. The previous source, **3.11.0**, added word highlighting that keeps reliable word times when only part of a sentence matches the automatic captions, a pace estimate that follows the speaker's local speed, an explicit word-time mode (auto, approximate follow-along, or audio alignment), truthful timing-source and audio-alignment status, plus optional audio-aligned word highlighting, earlier subtitle startup, shared caption requests, configurable high-contrast highlights, automatic recovery, and batched settings saves. The [latest packaged release](https://github.com/aolingge/yt-dual-subs/releases/latest) is **3.9.0**; use the source ZIP or Git checkout for these updates. See the [3.12.0 update notes](docs/releases/v3.12.0.md).
+The current source is **3.12.6**. It preserves complete sentences and original punctuation, softens word highlighting, batches concurrent status reads and avoids rebuilding unchanged recognition transcripts. Stable study-card IDs and local translation-target validation from 3.12.5 remain included. These corrections do not guarantee lower WER on every recording; see the [accuracy evidence](docs/ACCURACY.md). Alignment uses port **8767**. Chromium **116 or later** is required. See [3.12.6 notes](docs/releases/v3.12.6.md), [performance review](docs/PERFORMANCE.md) and [integration choices](docs/INTEGRATIONS.md).
 
 Browser references: [Edge sideloading guide](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome unpacked extension guide](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked).
 
@@ -177,6 +182,7 @@ Target languages include the built-in list and **Other language code…**, for e
 | Adjust box width | Drag either side grip, or use **Layout → Subtitle box width**. Double-click a grip to restore automatic width. |
 | Adjust timing | **Layout → Sync offset**, up to ±2 seconds. Exported SRT timing stays unchanged. |
 | Export captions | **Export subtitles**, choose original, translation, or bilingual. |
+| Export to Anki | **Saved review → Export to Anki (TSV)**; see [the import guide](docs/ANKI.md). |
 
 Shortcuts can be reassigned at `edge://extensions/shortcuts` or `chrome://extensions/shortcuts`. Repeat speeds include **0.75×, 0.6×, and 0.5×**; the normal playback rate returns when repeating stops.
 
@@ -185,7 +191,7 @@ Shortcuts can be reassigned at `edge://extensions/shortcuts` or `chrome://extens
 <details>
 <summary><strong>Why are no subtitles appearing?</strong></summary>
 
-Confirm that the video has a caption track in YouTube's **CC / Settings → Subtitles** menu. Enable the extension and captions, then refresh the page — especially after an extension update. Check the popup's status line for loading, fallback, or rate-limit messages. If there is no caption track, the extension cannot create one from audio.
+Confirm that the video has a caption track in YouTube's **CC / Settings → Subtitles** menu. Enable the extension and captions, then refresh the page — especially after an extension update. Check the popup's status line for loading, fallback, or rate-limit messages. If no readable track is confirmed, configure the optional local recognition service, check its connection, and start recognition manually.
 
 On Bilibili, open the player's caption menu. If there is no Chinese entry, the video has no readable Chinese track and the popup says so; import an SRT file instead. Some tracks are offered only to signed-in viewers, and the popup says that too.
 
@@ -250,10 +256,14 @@ Read the [full privacy and permission details](docs/PRIVACY.md).
 
 Found a problem? [Open an issue](https://github.com/aolingge/yt-dual-subs/issues) with your browser and extension versions, caption language, translation mode, and steps to reproduce. Include a public video link if useful; omit personal information.
 
-Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.12.0 update notes](docs/releases/v3.12.0.md). If it helps your learning, a GitHub star makes the project easier for others to find.
+Contributions are welcome. The extension uses plain JavaScript/CSS with no build step. See the [development guide](docs/DEVELOPMENT.md) and [3.12.1 update notes](docs/releases/v3.12.1.md). If it helps your learning, a GitHub star makes the project easier for others to find.
 
 ## Credits and license
 
 Based on [Gythiro/yt-dual-subs](https://github.com/Gythiro/yt-dual-subs), with multilingual study tools, word lookup, responsive layouts, resizable subtitles, and startup/synchronization improvements added in this repository. The original copyright notice is preserved.
 
 Released under the [MIT License](LICENSE). This is an independent extension and is not affiliated with YouTube, Google, or German Assistant.
+
+## 3.12.4 local recognition and review
+
+The panel now offers registered local models, runtime device status, Chinese script conversion, per-language terminology, optional sentence context, manual corrections and cached segment retries. See the [Chinese usage guide](docs/RECOGNITION_SETTINGS.md). Reload the extension and restart the updated source bridge; an older installed executable is unchanged.

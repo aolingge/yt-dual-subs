@@ -1,7 +1,7 @@
 /* Optional local audio alignment. Runs in a dedicated extension page so popup
    closure cannot interrupt an analysis. All API destinations are fixed. */
 "use strict";
-const AUDIO_BASE = "http://127.0.0.1:8765";
+const AUDIO_BASE = "http://127.0.0.1:8767";
 const AUDIO_ORIGINS = ["http://127.0.0.1/*"];
 // Result format this build applies: 2 adds the track position of every
 // sentence and the audio fingerprint to the helper's cache identity.
@@ -52,7 +52,7 @@ async function api(path, options = {}) {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), options.body instanceof File ? 120000 : 5000);
   try {
-    const response = await fetch(AUDIO_BASE + path, { ...options, signal: abort.signal, credentials: "omit" });
+    const response = await fetch(AUDIO_BASE + path, { ...options, signal: abort.signal, credentials: "omit", redirect: "error" });
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || "alignmentFailed");
     return value;
@@ -232,6 +232,7 @@ async function start(file) {
     if (!await refreshContext() || !context.cues.length) return;
     controls(true);
     const health = await api("/health");
+    if (health.service !== "yt-dual-subs-alignment") throw new Error("helperOffline");
     // A helper of an older result format cannot produce track-locked word
     // times, and its results would be refused silently after a full model run.
     // Restarting the helper from this folder is the fix, so say so before it

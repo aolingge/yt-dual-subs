@@ -29,7 +29,7 @@ os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 os.environ.setdefault("USE_TF", "0")
 
-PORT = 8765
+PORT = 8767
 VERSION = 2
 MODELS = {
     "de": ("oliverguhr/wav2vec2-base-german-cv9", "e3c2cb317c771e7fbbdfbf20be6017b8e65b232d"),
@@ -509,7 +509,7 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/health":
                 # The cache location is reported so "alignment works but nothing is
                 # cached" can be diagnosed instead of silently re-downloading models.
-                self.reply({"ok": True, "version": VERSION, "languages": list(MODELS),
+                self.reply({"ok": True, "service": "yt-dual-subs-alignment", "version": VERSION, "languages": list(MODELS),
                             "models": {key: value[0] for key, value in MODELS.items()},
                             "cacheDir": str(getattr(self.server.jobs, "root", "")),
                             "writable": getattr(self.server, "writable", None)})

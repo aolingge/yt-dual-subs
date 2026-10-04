@@ -177,7 +177,7 @@
     // A sentence can mix matched and estimated word times; carry the per-word
     // provenance so the reader can see which positions are actually known.
     pieces.forEach((p, i) => { if (matched[i].s) p.s = matched[i].s; });
-    if (cue.wordTimingSource === "audio") {
+    if (cue.wordTimingSource === "audio" || cue.wordTimingSource === "recognition") {
       if (matched.some((w, i) => !Number.isFinite(w.e) || w.e <= w.t || w.e > end ||
           (i + 1 < matched.length && w.e > matched[i + 1].t))) return null;
       pieces.forEach((p, i) => { p.e = matched[i].e; });
@@ -594,6 +594,9 @@
           !Number.isFinite(segment.start) || !Number.isFinite(segment.dur) || segment.dur <= 0 ||
           !Array.isArray(segment.words) || !segment.words.length || segment.words.length > 256 ||
           segment.words.some((w) => !w || !Number.isFinite(w.score) || w.score < 0.12 || w.score > 1)) continue;
+      // Match the helper's whole-sentence confidence gate as well as its
+      // per-word floor, including results restored from local cache.
+      if (segment.words.reduce((sum, word) => sum + word.score, 0) / segment.words.length < 0.25) continue;
       const end = segment.start + segment.dur;
       const candidate = { ...segment, end, wordTimingSource: "audio" };
       if (!captionPieces(candidate, language)) continue;

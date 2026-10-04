@@ -9,7 +9,7 @@ const KEY = 'settingsPendingV1';
 const copy = (value) => JSON.parse(JSON.stringify(value));
 const settle = () => new Promise(setImmediate);
 
-function mount({ local = {}, sync = {}, failSync = null, failLocal = false } = {}) {
+function mount({ local = {}, sync = {}, vault = {}, failSync = null, failLocal = false } = {}) {
   let now = 10000, seq = 0;
   const timers = new Map(), listeners = [], attempts = [], notices = [];
   const emit = (changes, area) => { for (const fn of listeners) fn(copy(changes), area); };
@@ -31,6 +31,9 @@ function mount({ local = {}, sync = {}, failSync = null, failLocal = false } = {
   const chrome = {
     runtime: { lastError: undefined,
       sendMessage(msg, done) {
+        if (msg.type === 'getBridgeConfig') {
+          worker.getBridgeConfig().then(config => done({ ok: true, ...config })); return;
+        }
         worker.enqueue(msg.patch).then(() => done({ ok: true }),
           (error) => done({ ok: false, error: String(error) }));
       } },
@@ -49,12 +52,14 @@ function mount({ local = {}, sync = {}, failSync = null, failLocal = false } = {
           attempts.push({ time: now, values: copy(patch) });
           if (failSync) throw new Error(failSync);
           write(sync, patch, 'sync');
-        }
+        },
+        remove(keys) { for (const key of keys) delete sync[key]; }
       }
     }
   };
   function context() {
     const realm = vm.createContext({ chrome,
+      YtdsBridgeVault: { read: async () => vault.token, write: async token => { vault.token = token; } },
       Date: class extends Date { static now() { return now; } },
       setTimeout(fn, delay) { const id = ++seq; timers.set(id, { at: now + delay, fn }); return id; },
       clearTimeout(id) { timers.delete(id); } });
@@ -65,7 +70,7 @@ function mount({ local = {}, sync = {}, failSync = null, failLocal = false } = {
   const client = context();
   client.onChanged((changes) => notices.push(copy(changes)));
   const api = {
-    worker, client, local, sync, attempts, notices,
+    worker, client, local, sync, vault, attempts, notices,
     newClient: context,
     setFailSync(value) { failSync = value; },
     remote(patch) { write(sync, patch, 'sync'); },
@@ -87,6 +92,35 @@ function mount({ local = {}, sync = {}, failSync = null, failLocal = false } = {
 }
 
 const get = (client, defaults = {}) => new Promise(resolve => client.get(defaults, resolve));
+
+test('legacy default highlight palette migrates once and later user edits survive', async () => {
+  const defaults = { karaokeBg: '#ffd65c', karaokeTextColor: '#ffffff',
+    karaokeOpacity: 0.95, karaokeStyleV2: false };
+  const p = mount({ sync: { karaokeBg: '#ffd65c', karaokeTextColor: '#161616', karaokeOpacity: 0.95 } });
+  assert.equal((await get(p.client, defaults)).karaokeTextColor, '#ffffff');
+  await p.advance(300);
+  assert.equal(p.sync.karaokeStyleV2, true);
+  assert.equal(p.sync.karaokeTextColor, '#ffffff');
+  await p.client.set({ karaokeTextColor: '#161616' });
+  assert.equal((await get(p.newClient(), defaults)).karaokeTextColor, '#161616',
+    'a deliberate later edit is not migrated a second time');
+});
+
+test('custom highlight palettes are preserved during the one-time style upgrade', async () => {
+  const defaults = { karaokeBg: '#ffd65c', karaokeTextColor: '#ffffff',
+    karaokeOpacity: 0.95, karaokeStyleV2: false };
+  for (const patch of [{ karaokeBg: '#aaffaa' }, { karaokeOpacity: 0.6 }, { karaokeTextColor: '#202020' }]) {
+    const palette = { karaokeBg: '#ffd65c', karaokeTextColor: '#161616', karaokeOpacity: 0.95, ...patch };
+    const p = mount({ sync: palette });
+    const current = await get(p.client, defaults);
+    assert.equal(current.karaokeTextColor, palette.karaokeTextColor);
+    assert.equal(current.karaokeBg, palette.karaokeBg);
+    assert.equal(current.karaokeOpacity, palette.karaokeOpacity);
+    await p.advance(300);
+    assert.equal(p.sync.karaokeStyleV2, true);
+    assert.equal(p.sync.karaokeTextColor, palette.karaokeTextColor);
+  }
+});
 
 test('hundreds of slider edits apply locally and coalesce into one sync write', async () => {
   const p = mount();
@@ -179,4 +213,61 @@ test('only scalar preference patches enter the settings queue', async () => {
   const p = mount();
   await assert.rejects(p.worker.enqueue({ studyCardsV1: ['not a preference'], origSize: Infinity }), /Invalid/);
   assert.equal(p.local[KEY], undefined);
+});
+
+test('settings queue accepts only known keys and safe ranges', async () => {
+  const p = mount();
+  await assert.rejects(p.worker.enqueue({ unknownPreference: true }), /Invalid/);
+  await assert.rejects(p.worker.enqueue({ origSize: 1000 }), /Invalid/);
+  await assert.rejects(p.worker.enqueue({ bridgeBase: 'https://example.com:8766', bridgeToken: 'secret' }), /Invalid/);
+  await p.worker.enqueue({ bridgeBase: '127.0.0.1:8766', bridgeToken: 'secret', bbGermanLayoutV1: true });
+  assert.equal(p.local[KEY].values.bridgeBase, '127.0.0.1:8766');
+});
+
+test('legacy token migrates from sync and pending into the private vault', async () => {
+  const p = mount({ sync: { bridgeBase: 'http://127.0.0.1:8766', bridgeToken: 'old-test-token' },
+    local: { [KEY]: { values: { bridgeToken: 'new-test-token', origSize: 24 }, nextSyncAt: 0 } } });
+  await p.worker.startSync();
+  assert.equal(p.sync.bridgeToken, undefined);
+  assert.equal(p.vault.token, 'new-test-token');
+  assert.equal(p.local.bridgeConfigV1.bridgeToken, undefined);
+  assert.equal(p.local[KEY].values.bridgeToken, undefined);
+  assert.equal((await p.worker.getBridgeConfig()).bridgeToken, 'new-test-token');
+  assert.equal((await get(p.client)).bridgeToken, undefined, 'page settings do not request credentials');
+  assert.equal((await get(p.newClient(), { bridgeToken: '' })).bridgeToken, 'new-test-token');
+  await p.advance(250);
+  assert.equal(p.sync.origSize, 24);
+  assert.ok(p.attempts.every(a => !Object.hasOwn(a.values, 'bridgeToken')));
+});
+
+test('legacy local token wins over sync and private empty token cannot be resurrected', async () => {
+  const p = mount({ local: { bridgeConfigV1: { bridgeToken: 'local-test-token' } },
+    sync: { bridgeToken: 'sync-test-token' } });
+  await p.worker.startSync();
+  assert.equal(p.vault.token, 'local-test-token');
+  assert.deepEqual(p.local.bridgeConfigV1, {});
+  const cleared = mount({ vault: { token: '' }, local: { bridgeConfigV1: { bridgeToken: 'stale-local' } } });
+  await cleared.worker.startSync();
+  assert.equal(cleared.vault.token, '');
+});
+
+test('token changes and clearing never enter sync, including after restart', async () => {
+  const p = mount();
+  await p.worker.enqueue({ bridgeBase: 'http://localhost:8766', bridgeToken: 'test-token' });
+  assert.equal((await p.worker.getBridgeConfig()).bridgeBase, 'http://localhost:8766', 'use staged address immediately');
+  assert.equal(p.local[KEY].values.bridgeToken, undefined);
+  await p.advance(250);
+  await p.worker.enqueue({ bridgeToken: '' });
+  const restarted = mount({ local: p.local, vault: p.vault, sync: { ...p.sync, bridgeToken: 'stale-test-token' } });
+  await restarted.worker.startSync();
+  assert.equal((await restarted.worker.getBridgeConfig()).bridgeToken, '');
+  assert.equal(restarted.sync.bridgeToken, undefined);
+});
+
+test('recognition language accepts supported speech languages only', async () => {
+  const p = mount();
+  await p.worker.enqueue({ recognitionLanguage: 'de' });
+  assert.equal(p.local[KEY].values.recognitionLanguage, 'de');
+  await assert.rejects(p.worker.enqueue({ recognitionLanguage: 'translated-to-German' }), /Invalid settings patch/);
+  assert.equal(p.local[KEY].values.recognitionLanguage, 'de');
 });

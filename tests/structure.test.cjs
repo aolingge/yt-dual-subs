@@ -27,6 +27,10 @@ function defaultsOf(source) {
 test('the content script and the popup agree on every setting and its default', () => {
   const content = defaultsOf(read('content.js'));
   const popup = defaultsOf(read('popup.js'));
+  // Credentials belong only to the privileged popup/worker, never page defaults.
+  assert.equal(content.bridgeToken, undefined);
+  delete popup.bridgeBase;
+  delete popup.bridgeToken;
   // spread out of the vm realm so the comparison is about values
   assert.deepEqual({ ...content }, { ...popup });
 });
@@ -103,6 +107,7 @@ test('audio helper access is optional and limited to the loopback host', () => {
   // storage is the base; tabCapture and offscreen are what let the user capture
   // the current tab's audio and keep hearing it while it is recognized.
   assert.deepEqual(manifest.permissions, ['storage', 'tabCapture', 'offscreen']);
-  assert.deepEqual(manifest.optional_host_permissions, ['http://127.0.0.1/*']);
+  assert.deepEqual(manifest.optional_host_permissions,
+    ['http://127.0.0.1/*', 'https://127.0.0.1/*', 'http://localhost/*', 'https://localhost/*']);
   assert.equal(read('alignment.js').includes('credentials: "omit"'), true);
 });

@@ -101,11 +101,11 @@ test('site.js reports the platform and what it can do', () => {
 
 test('Bilibili defaults to German on top without changing anything YouTube reads', () => {
   const bili = mountSite(BILI_P1).site;
-  assert.deepEqual({ ...bili.siteDefaults() }, { targetLang: 'de', order: 'trans-top' });
+  assert.deepEqual({ ...bili.siteDefaults() }, { enabled: true, targetLang: 'de', order: 'trans-top', bbGermanLayoutV1: false });
 
   // A logical Bilibili write lands on Bilibili's own storage keys...
-  assert.deepEqual({ ...bili.toStore({ targetLang: 'de', order: 'trans-top', origSize: 22 }) },
-    { bbTargetLang: 'de', bbOrder: 'trans-top', origSize: 22 });
+  assert.deepEqual({ ...bili.toStore({ enabled: false, targetLang: 'de', order: 'trans-top', origSize: 22 }) },
+    { bbEnabled: false, bbTargetLang: 'de', bbOrder: 'trans-top', origSize: 22 });
   // ...so the user's YouTube languages survive a Bilibili change, and vice versa.
   const stored = { targetLang: 'zh-CN', order: 'orig-top', bbTargetLang: 'de', bbOrder: 'trans-top' };
   assert.deepEqual(plain(bili.fromStore(stored)), { targetLang: 'de', order: 'trans-top' });
@@ -130,6 +130,48 @@ test('the video key is the video AND the part, so parts never share a cache', ()
   assert.equal(mountSite('https://www.bilibili.com/').site.videoKey(), '');
 });
 
+test('Bilibili enable state is independent of YouTube, including change notifications', () => {
+  const site = mountSite(BILI_P1).site;
+  const yt = site.forPlatform('youtube');
+  assert.deepEqual(plain(site.toStore({ enabled: false })), { bbEnabled: false });
+  assert.deepEqual(plain(yt.toStore({ enabled: true })), { enabled: true });
+  const saved = { enabled: false, bbEnabled: true };
+  assert.equal(site.fromStore(saved).enabled, true);
+  assert.equal(yt.fromStore(saved).enabled, false);
+  assert.ok(!('enabled' in site.fromStore({ enabled: false })), 'old global off state does not disable Bilibili');
+  assert.deepEqual(plain(site.logicalChanges({ enabled: { newValue: false } })), {});
+  assert.deepEqual(plain(site.logicalChanges({ bbEnabled: { newValue: false } })), { enabled: { newValue: false } });
+});
+
+test('the old Chinese-to-Chinese layout is repaired once without rewriting YouTube', () => {
+  const site = mountSite(BILI_P1).site;
+  const saved = { enabled: false, targetLang: 'zh-CN', order: 'orig-top',
+    bbTargetLang: 'zh-CN', bbOrder: 'orig-top' };
+  const logical = site.fromStore(saved);
+  const repair = site.repairSettings(logical);
+  const storedPatch = site.toStore(repair);
+  const repaired = { ...saved, ...storedPatch };
+  assert.equal(repaired.bbTargetLang, 'de');
+  assert.equal(repaired.bbOrder, 'trans-top');
+  assert.equal(repaired.enabled, false);
+  assert.equal(repaired.targetLang, 'zh-CN');
+  assert.equal(repaired.order, 'orig-top');
+  assert.deepEqual(plain(site.repairSettings(site.fromStore(repaired))), {});
+  assert.deepEqual(plain(site.forPlatform('bilibili').repairSettings(logical)), plain(repair));
+  assert.deepEqual(plain(site.forPlatform('youtube').repairSettings(saved)), {});
+  assert.deepEqual(plain(site.repairSettings({ bbGermanLayoutV1: true, targetLang: 'en', order: 'orig-top' })), {},
+    'a later deliberate preference survives');
+});
+
+test('the player toggle waits for the native right control group', () => {
+  const dom = bilibiliDom();
+  const site = mountSite(BILI_P1, dom).site;
+  dom.controlsRight.remove();
+  assert.equal(site.controlsHost(dom.player), null);
+  dom.controlWrap.appendChild(dom.controlsRight);
+  assert.equal(site.controlsHost(dom.player), dom.controlsRight);
+});
+
 test('the overlay attaches to the video box, not the whole player', () => {
   const dom = bilibiliDom();
   const site = mountSite(BILI_P1, dom).site;
@@ -137,7 +179,7 @@ test('the overlay attaches to the video box, not the whole player', () => {
   assert.equal(player, dom.player);
   assert.equal(site.overlayHost(player), dom.videoWrap);
   // The toggle button goes somewhere that cannot disturb the native bar.
-  assert.equal(site.controlsHost(player), dom.player);
+  assert.equal(site.controlsHost(player), dom.controlsRight);
   assert.equal(site.getVideo(), dom.video);
 });
 
@@ -376,6 +418,20 @@ test('a failing caption download reports fetch_failed, never a spinner', async (
   assert.match(msg.detail, /network down/);
 });
 
+test('subtitle tracks on remote or non-HTTPS hosts are refused', async () => {
+  const evil = { ...TRACK_ZH_HUMAN, subtitle_url: 'http://attacker.example/subtitle.json' };
+  const api = await mounted({
+    tracks: [evil],
+    state: sampleState(undefined, [evil]),
+    respond: (target) => {
+      if (target.includes('/x/player/wbi/v2')) return { body: metaJson([evil]) };
+      return { body: BODY_ZH };
+    }
+  });
+  assert.equal(api.requests.some((r) => /attacker\.example/i.test(r.url)), false);
+  assert.equal(api.last('cues'), null);
+});
+
 test('retries are bounded and stop on their own', async () => {
   const api = mountReader({
     url: BILI_P1,
@@ -515,7 +571,7 @@ test('the popup can ask any platform for its settings mapping', () => {
     { bbTargetLang: 'de', bbOrder: 'trans-top' });
   assert.deepEqual(plain(forYt.toStore({ targetLang: 'zh-CN', order: 'orig-top' })),
     { targetLang: 'zh-CN', order: 'orig-top' });
-  assert.deepEqual(plain(forBili.siteDefaults()), { targetLang: 'de', order: 'trans-top' });
+  assert.deepEqual(plain(forBili.siteDefaults()), { enabled: true, targetLang: 'de', order: 'trans-top', bbGermanLayoutV1: false });
   assert.deepEqual(plain(forYt.siteDefaults()), {});
   // Round trip: what the popup reads back is logical again, and the other
   // site's stored key is dropped rather than leaking in.
@@ -536,11 +592,18 @@ test('a tab URL decides the platform, and anything else counts as YouTube', () =
   assert.equal(site.platformOfUrl('chrome-extension://abcdef/popup.html'), 'youtube');
   assert.equal(site.platformOfUrl(''), 'youtube');
   assert.equal(site.platformOfUrl(undefined), 'youtube');
+  assert.equal(site.isBilibiliVideoUrl('https://www.bilibili.com/video/BV1xx411c7mD/?p=2'), true);
+  assert.equal(site.isBilibiliVideoUrl('https://www.bilibili.com/video/av80433022'), true);
+  assert.equal(site.isBilibiliVideoUrl('https://www.bilibili.com/'), false);
+  assert.equal(site.isBilibiliVideoUrl('https://space.bilibili.com/1'), false);
+  assert.equal(site.isBilibiliVideoUrl('https://www.bilibili.com/bangumi/play/ep123'), false);
+  assert.equal(site.isBilibiliVideoUrl(undefined), false);
 });
 
 test('the popup reads and writes the settings of the tab it is opened over', () => {
   const source = read('popup.js');
-  assert.match(source, /site = YtdsSite\.forPlatform\(platformOfUrl\(tab && tab\.url\)\)/);
+  assert.match(source, /site = YtdsSite\.forPlatform\(await platformForTab\(tab\)\)/);
+  assert.match(source, /sendToTab\(tab\.id, \{ type: "status" \}\)/);
   assert.match(source, /YtdsSettings\.set\(toStore\(patch\)\)/);
   assert.match(source, /YtdsSettings\.get\(toStore\(\{ \.\.\.DEFAULTS, \.\.\.site\.siteDefaults\(\) \}\)/);
   const stored = /const stored = fromStore\(got\);/.exec(source);
@@ -564,8 +627,9 @@ test('the popup loads the adapter and ships the Bilibili card', () => {
 
   const source = read('popup.js');
   assert.match(source, /function renderBiliCard\(s\)/);
-  // The panel is only shown on a Bilibili tab.
-  assert.match(source, /const on = !!s && s\.platform === "bilibili";/);
+  // Settings can be site-scoped, but video controls only appear on watch pages.
+  assert.match(source, /const isBilibiliVideo = !!site && site\.isBilibili/);
+  assert.match(source, /site\.isBilibiliVideoUrl\(activeTab && activeTab\.url\)/);
   // The track pick is bound to the video AND part, never to the language alone.
   assert.match(source, /const value = select\.value \? videoId \+ "\|" \+ select\.value : "";/);
 });

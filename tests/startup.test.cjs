@@ -266,3 +266,26 @@ test('a stale seeded guess never switches the page to scrape mode', async () => 
   assert.equal(posted[0].cues[0].text, 'Hallo.');
   assert.equal(posted[0].translationPending, true);
 });
+
+test('the page-world reader answers the startup handshake', () => {
+  const { listeners, posted, window } = seedSetup();
+  listeners.message({ source: window, data: {
+    source: 'ytds-content', type: 'hello'
+  } });
+  assert.equal(posted.at(-1).source, 'ytds-inject');
+  assert.equal(posted.at(-1).type, 'ready');
+});
+
+test('content resends its config after the page-world reader becomes ready', async () => {
+  const { mountContent } = require('./harness.cjs');
+  const api = await mountContent({ cues: [{ start: 0, dur: 1000, text: 'Hallo.' }] });
+
+  assert.ok(api.outbound.some((message) => message.type === 'hello'));
+  assert.equal(api.outbound.filter((message) => message.type === 'config').length, 1);
+
+  api.sendInject({ type: 'ready' });
+  assert.equal(api.outbound.filter((message) => message.type === 'config').length, 2,
+    'ready forces a second config in case the first crossed before inject.js installed its listener');
+  assert.equal(api.outbound.at(-1).type, 'config');
+  assert.equal(api.outbound.at(-1).targetLang, 'zh-CN');
+});

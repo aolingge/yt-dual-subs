@@ -22,8 +22,10 @@ test('custom widths scale with the player, allow full-player width, and reset to
   assert.equal(overlay.offsetWidth, 540);
   page.resizePlayer(640, 360);
   assert.equal(overlay.offsetWidth, 384);
-  page.changeSettings({ overlayWidthPct: 200 });
+  page.changeSettings({ overlayWidthPct: 96 });
   assert.equal(overlay.style.width, '96%');
+  page.changeSettings({ overlayWidthPct: 200 });
+  assert.equal(overlay.style.width, '96%', 'out-of-range storage values are ignored');
   page.setFullscreen(true).resizePlayer(1920, 1080);
   assert.ok(overlay.offsetWidth > 1100, 'a manual width is not limited by the old automatic cap');
   right.dispatch('dblclick');

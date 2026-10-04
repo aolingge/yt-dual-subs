@@ -6,6 +6,20 @@ const vm = require('node:vm');
 const timing = require('../word-timing.js');
 const { mountContent } = require('./harness.cjs');
 
+test('recognition word ends require complete text matches and reject overlapping times', () => {
+  const cue = { text: 'Hallo Welt.', start: 120000, end: 122000,
+    wordTimingSource: 'recognition', words: [
+      { u: 'Hallo', t: 120100, e: 120700, s: 'recognition' },
+      { u: 'Welt.', t: 121000, e: 121600, s: 'recognition' }] };
+  const pieces = timing.captionPieces(cue, 'de');
+  assert.equal(pieces.map(p => p.u).join(''), cue.text);
+  assert.equal(pieces[0].e, 120700);
+  assert.equal(pieces[1].e, 121600);
+  assert.equal(pieces[0].s, 'recognition');
+  assert.equal(timing.captionPieces({ ...cue, words: [cue.words[0]] }, 'de'), null);
+  assert.equal(timing.captionPieces({ ...cue, words: [{ ...cue.words[0], e: 121100 }, cue.words[1]] }, 'de'), null);
+});
+
 const timed = (text, times, language = 'de') => {
   const words = timing.tokens(text, language).map((p, i) => ({ t: times[i], u: p.text }));
   return { start: 0, dur: 4000, text, words };
@@ -28,6 +42,14 @@ test('word-time rendering preserves punctuation, spacing and text across languag
     assert.ok(estimated.every((p, i) => p.t >= 0 && p.t < 4000 &&
       (!i || p.t > estimated[i - 1].t)), language);
   }
+});
+
+test('word pieces retain punctuation on the final word', () => {
+  const cue = timed('„Hallo, schöne Welt!“', [0, 500, 1000]);
+  const pieces = timing.captionPieces(cue, 'de');
+  assert.ok(pieces, 'word timings remain usable');
+  assert.equal(pieces.map((piece) => piece.u).join(''), cue.text);
+  assert.equal(pieces.at(-1).u, 'Welt!“');
 });
 
 test('phrase offsets, missing words and invalid clocks do not count as individual word times', () => {
@@ -395,14 +417,19 @@ function bridge({ language = 'de', donorLanguage = 'de', useTlang = true,
   for (const name of ['word-timing.js', 'inject.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', name), 'utf8'), context);
   }
-  const config = (nonce) => listeners.message({ source: window, data: {
-    source: 'ytds-content', type: 'config', targetLang: 'zh-CN',
-    useTlang, useWordTiming, nonce } });
+  let currentNonce = 1;
+  const config = (nonce) => {
+    currentNonce = nonce;
+    return listeners.message({ source: window, data: {
+      source: 'ytds-content', type: 'config', targetLang: 'zh-CN',
+      useTlang, useWordTiming, nonce } });
+  };
   config(1);
   const respond = (request, events) => request.resolve({ ok: true,
     text: async () => JSON.stringify({ events }) });
   const disableTiming = () => listeners.message({ source: window, data: {
-    source: 'ytds-content', type: 'word-timing-config', useWordTiming: false } });
+    source: 'ytds-content', type: 'word-timing-config', useWordTiming: false,
+    nonce: currentNonce } });
   return { requests, posted, config, respond, location, disableTiming };
 }
 const flush = () => new Promise(setImmediate);

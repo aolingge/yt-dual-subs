@@ -45,6 +45,12 @@
   <main class="ctrl">
     <p class="status" id="statusLine" role="status" aria-live="polite" hidden></p>
 
+    <section class="card recovery-card" id="recoveryCard">
+      <h2 class="card-title" data-i18n="recoveryTitle">恢复诊断</h2>
+      <p class="recovery-status" id="recoveryStatus" role="status" aria-live="polite" data-i18n="recoveryNone">尚无恢复记录</p>
+      <p class="recovery-detail" id="recoveryDetail" hidden></p>
+    </section>
+
     <!-- ================= 当前视频（本页快捷操作） ================= -->
     <section class="card">
       <h2 class="card-title" data-i18n="secLive">当前视频</h2>
@@ -83,6 +89,15 @@
     <!-- ================= 哔哩哔哩（只在 B 站页面出现） ================= -->
     <section class="card" id="biliCard" hidden>
       <h2 class="card-title" data-i18n="bbSection">哔哩哔哩</h2>
+      <div class="row check-row">
+        <label class="chk">
+          <input type="checkbox" id="bbEnabled" />
+          <span data-i18n="bbEnableLabel">在 B 站启用双语字幕</span>
+        </label>
+      </div>
+      <div class="pos-foot">
+        <span class="pos-hint" data-i18n="bbEnableHint">只影响 B 站，不影响 YouTube。也可点击播放器底部的双语字幕图标开关。</span>
+      </div>
       <div class="pos-foot">
         <span class="pos-hint" data-i18n="bbSiteHint">上方德语译文、下方中文原文。不支持直播、番剧和手机网页版。</span>
       </div>
@@ -113,6 +128,15 @@
     <!-- ============ 本机语音识别（没有字幕的视频） ============ -->
     <section class="card" id="recogCard">
       <h2 class="card-title" data-i18n="recogSection">本机语音识别</h2>
+      <div class="row">
+        <label for="recognitionLanguage" data-i18n="recogLanguage">视频语音语言</label>
+        <select id="recognitionLanguage">
+          <option value="auto" data-i18n="recogLanguageAuto">自动检测</option>
+          <option value="zh" data-i18n="recogLanguageChinese">中文</option>
+          <option value="de" data-i18n="recogLanguageGerman">德语</option>
+          <option value="en" data-i18n="recogLanguageEnglish">英语</option>
+        </select>
+      </div>
       <div class="pos-foot">
         <span class="pos-hint" data-i18n="recogHint">给没有字幕的视频生成字幕：音频只发送到本机运行的 Deutsch Overlay，不上传。</span>
       </div>
@@ -127,7 +151,8 @@
 
       <div class="row">
         <label for="bridgeToken" data-i18n="recogTokenLabel">本机服务令牌</label>
-        <input type="text" id="bridgeToken" spellcheck="false" autocomplete="off">
+        <input type="password" id="bridgeToken" spellcheck="false" autocomplete="off" maxlength="512" aria-describedby="bridgeTokenHint">
+        <div class="pos-foot"><span id="bridgeTokenHint" class="pos-hint" data-i18n="recogTokenLocal">令牌仅保存在本机浏览器，不参与同步；重置设置会清除。</span></div>
       </div>
 
       <div class="row">
@@ -142,6 +167,24 @@
       </div>
 
       <p class="status" id="recogStatus" role="status" aria-live="polite" hidden></p>
+      <details id="bridgeOptions">
+        <summary data-i18n="recogOptions">识别模型与术语</summary>
+        <p class="pos-hint" data-i18n="recogOptionsHint">先检查连接再载入设置。术语只送到本机，设置在本次桥运行期间有效；修改前请停止识别。</p>
+        <button type="button" id="bridgeLoad" data-i18n="recogOptionsLoad">载入本机设置</button>
+        <p id="bridgeDevice" class="status" role="status"></p>
+        <fieldset id="bridgeOptionsFields" disabled>
+          <div class="row"><label for="bridgeModel" data-i18n="recogModel">识别模型</label><select id="bridgeModel"></select></div>
+          <div class="row"><label for="bridgeScript" data-i18n="recogScript">中文字形</label><select id="bridgeScript">
+            <option value="simplified" data-i18n="recogScriptSimplified">简体</option><option value="traditional" data-i18n="recogScriptTraditional">繁体</option><option value="raw" data-i18n="recogScriptRaw">保留原始字形</option>
+          </select></div>
+          <div class="row"><label for="bridgeWordsDe" data-i18n="recogWordsDe">德语术语（可选）</label><textarea id="bridgeWordsDe" maxlength="1000" rows="2" spellcheck="false"></textarea></div>
+          <div class="row"><label for="bridgeWordsEn" data-i18n="recogWordsEn">英语术语（可选）</label><textarea id="bridgeWordsEn" maxlength="1000" rows="2" spellcheck="false"></textarea></div>
+          <div class="row"><label for="bridgeWordsZh" data-i18n="recogWordsZh">中文术语（可选）</label><textarea id="bridgeWordsZh" maxlength="1000" rows="2" spellcheck="false"></textarea></div>
+          <label><input type="checkbox" id="bridgeSentenceContext"><span data-i18n="recogSentenceContext">合并相邻短片段后翻译整句（可选）</span></label>
+          <button type="button" id="bridgeApply" data-i18n="recogOptionsApply">应用到本机桥</button>
+        </fieldset>
+        <p id="bridgeOptionsStatus" class="status" role="status" aria-live="polite"></p>
+      </details>
     </section>
 
     <!-- ============================ VIDEO STUDY ============================ -->
@@ -154,7 +197,9 @@
       <div class="study-actions">
         <button id="studyPreset" type="button" data-i18n="studyPreset">使用学习预设</button>
         <button id="saveSentence" type="button" data-i18n="studySave">收藏当前句</button>
+        <button id="studyOpen" type="button" data-i18n="studyOpen">打开常驻学习页面</button>
       </div>
+      <label class="study-pause" for="autoPause"><input id="autoPause" type="checkbox"><span data-i18n="studyAutoPause">每句结束后暂停</span></label>
       <details class="study-details" id="transcriptPanel">
         <summary><span data-i18n="studyTranscript">逐句浏览</span><span id="transcriptCount"></span></summary>
         <div class="study-details-body">
@@ -169,6 +214,7 @@
         <div class="study-list study-details-body" id="savedList"></div>
         <div class="study-library-actions">
           <button id="studyExport" type="button" data-i18n="studyExport">导出收藏</button>
+          <button id="studyAnkiExport" type="button" data-i18n="studyAnkiExport">导出到 Anki（TSV）</button>
           <button id="studyImportButton" type="button" data-i18n="studyImport">导入收藏</button>
           <input id="studyImportFile" type="file" accept=".json,application/json" hidden />
         </div>
@@ -480,7 +526,9 @@
 
   <script src="site.js"></script>
   <script src="settings.js"></script>
+  <script src="bridge-client.js"></script>
   <script src="popup.js"></script>
+  <script src="study-export.js"></script>
   <script src="study.js"></script>
 </body>
 </html>

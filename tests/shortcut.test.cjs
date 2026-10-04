@@ -33,7 +33,8 @@ async function loadContent(saved) {
       onChanged: { addListener(fn) { listeners.storageChanged = fn; } },
       local: { get(_key, done) { done({}); } },
       sync: {
-        get(defaults, done) { done({ ...defaults, ...saved }); },
+        // Keep highlight migration separate from these shortcut/font checks.
+        get(defaults, done) { done({ ...defaults, karaokeStyleV2: true, ...saved }); },
         set(value) { writes.push(value); }
       }
     }

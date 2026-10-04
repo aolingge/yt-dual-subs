@@ -34,9 +34,17 @@ test('a paused or backgrounded player stops re-rendering, but a seek still does'
   player.at(2.5);
   assert.equal(player.read().original, 'A.', 'a paused tick must not repaint');
 
+  const pausedTimerCount = player.cueLoopCount;
+  player.fire('pause');
+  assert.equal(player.cueLoopCount, pausedTimerCount,
+    'pause keeps cue mode active without leaving a new polling interval');
+
   assert.equal(player.seekTo(2.5).original, 'B.', 'a seek forces one repaint');
 
   player.setPaused(false);
+  player.fire('play');
+  assert.equal(player.cueLoopCount, pausedTimerCount + 1,
+    'play resumes the cue timer after the pause');
   player.setHidden(true);
   player.at(0.5);
   assert.equal(player.read().original, 'B.', 'a hidden tab must not repaint');
@@ -147,7 +155,6 @@ test('the status snapshot describes what the page is doing', async () => {
     // the local recognizer must refuse to start on this video.
     cueSource: 'page', captionAvailability: 'present',
     recognitionState: '', recognitionMessage: '', recognitionCueCount: 0,
-    bridgeBase: '', bridgeToken: ''
   });
 
   const off = await mountContent({ cues, aligned: true, settings: { enabled: false } });

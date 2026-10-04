@@ -55,6 +55,7 @@ function element() {
     },
     setAttribute(name, value) { attrs.set(name, String(value)); },
     getAttribute(name) { return attrs.has(name) ? attrs.get(name) : null; },
+    removeAttribute(name) { attrs.delete(name); },
     click() {}, remove() {}
   };
   Object.defineProperty(el, 'textContent', {
@@ -188,7 +189,9 @@ async function mountContent(options = {}) {
       sync: {
         get(defaults, done) {
           if (state.dead) invalidated();
-          done({ ...defaults, backend, fontSizeRepair20260926: true, ...settings });
+          // Ordinary playback fixtures represent preferences after migrations.
+          // settings.test.cjs exercises the real legacy highlight upgrade.
+          done({ ...defaults, backend, fontSizeRepair20260926: true, karaokeStyleV2: true, ...settings });
         },
         set(values) {
           if (state.dead) invalidated();
@@ -290,6 +293,11 @@ async function mountContent(options = {}) {
     advance(ms) { time.advance(ms); return api; },
     fire(type, extra) {
       for (const listener of listeners[type] || []) listener({ type, target: window, ...extra });
+      return api;
+    },
+    detachOverlay() {
+      const current = api.overlayEl();
+      if (current) current.isConnected = false;
       return api;
     },
     // Point the mouse at the player (clientX/clientY inside the fake rect).

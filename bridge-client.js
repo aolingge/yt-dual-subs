@@ -46,6 +46,7 @@
   const PACKET_FRAMES = 16000;
   const HEALTH_TIMEOUT_MS = 2500;
   const REQUEST_TIMEOUT_MS = 8000;
+  const MAX_RESPONSE_TEXT_CHARS = 4 << 20;
   // The transcript poll waits server-side for new text; a shorter wait keeps a
   // stopped bridge from stalling the caller for long.
   const POLL_WAIT_SECONDS = 10;
@@ -63,7 +64,30 @@
   function baseUrlOf(value) {
     const text = String(value == null ? "" : value).trim().replace(/\/+$/, "");
     if (!text) return DEFAULT_BASE;
-    return /^https?:\/\//i.test(text) ? text : "http://" + text;
+    const candidate = /^https?:\/\//i.test(text) ? text : "http://" + text;
+    let parsed;
+    try {
+      if (typeof URL === "function") parsed = new URL(candidate);
+      else {
+        const match = candidate.match(/^(https?):\/\/((?:\[[^\]]+\])|[^/:?#]+)(?::(\d+))?(\/[^?#]*)?(?:\?([^#]*))?(?:#(.*))?$/i);
+        if (!match) throw new Error("bad URL");
+        parsed = { protocol: match[1].toLowerCase() + ":", hostname: match[2],
+          username: "", password: "", search: match[5] ? "?" + match[5] : "",
+          hash: match[6] ? "#" + match[6] : "", pathname: match[4] || "/",
+          toString: () => candidate };
+      }
+    } catch (_e) {
+      throw new BridgeError("invalid_base", "bridge address is not a valid URL");
+    }
+    // Recognition is deliberately local-only: the bearer token must never be
+    // sent to a remote host or a URL with a hidden redirect/path.
+    const host = String(parsed.hostname || "").toLowerCase();
+    const loopback = host === "127.0.0.1" || host === "localhost";
+    if (!loopback || !/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password ||
+        parsed.search || parsed.hash || parsed.pathname !== "/") {
+      throw new BridgeError("invalid_base", "bridge address must be a loopback HTTP URL");
+    }
+    return parsed.toString().replace(/\/+$/, "");
   }
 
   // A bridge token is a secret, so anything it might leak into is a bug. This
@@ -88,9 +112,10 @@
 
   function bridgeErrorFrom(status, payload) {
     const error = payload && payload.error ? payload.error : null;
+    const code = /^[a-z][a-z0-9_]{0,63}$/.test(error?.code || "") ? error.code : "http_" + status;
     return new BridgeError(
-      (error && error.code) || "http_" + status,
-      (error && error.message) || "bridge answered HTTP " + status,
+      code,
+      "bridge request failed: " + code, // server text can contain credentials or private details
       status
     );
   }
@@ -101,6 +126,7 @@
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     const init = Object.assign({}, options);
+    init.redirect = "error"; // A loopback service must never redirect credentials.
     if (controller) init.signal = controller.signal;
     if (init.method && init.method !== "GET" && typeof init.body === "string") {
       init.headers = Object.assign(
@@ -112,6 +138,9 @@
       .then(() => fetchImpl(url, init))
       .then((response) =>
         response.text().then((text) => {
+          if (typeof text === "string" && text.length > MAX_RESPONSE_TEXT_CHARS) {
+            throw new BridgeError("response_too_large", "bridge response exceeded the size limit");
+          }
           let payload = null;
           if (text) {
             try { payload = JSON.parse(text); } catch (_e) { payload = null; }
@@ -182,6 +211,10 @@
       captionAvailability: fields.captionAvailability,
       sourceKind: fields.sourceKind || "tab_capture",
       sourceLanguage: fields.sourceLanguage || "auto",
+      // The local OPUS bridge currently exposes German only. The target is
+      // still sent explicitly so an unsupported future selection is rejected
+      // by the bridge instead of silently receiving German text.
+      translationTarget: fields.translationTarget || "de",
       timelineEpoch: Number(fields.timelineEpoch || 0),
       title: fields.title || "",
       url: fields.url || "",
@@ -255,6 +288,12 @@
     return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
   }
 
+  // Keep raw model/provider text separate from display cleanup. Punctuation
+  // and line structure must remain recoverable for review and export.
+  function rawText(value) {
+    return String(value == null ? "" : value).replace(/\r\n?/g, "\n").trim();
+  }
+
   /**
    * One recognized segment -> one cue.
    *
@@ -265,20 +304,26 @@
    * still show the original" means on screen.
    */
   function cueFromSegment(segment) {
-    if (!segment) return null;
+    if (!segment || typeof segment !== "object") return null;
     const text = clampText(segment.original);
     const german = clampText(segment.german);
-    const startMs = Math.max(0, Math.round(Number(segment.startMs) || 0));
-    const endMs = Math.max(startMs, Math.round(Number(segment.endMs) || startMs));
-    if (!text && !german) return null;
+    const start = segment.startMs, end = segment.endMs;
+    // Malformed media coordinates cannot be repaired with arrival time or 0.
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start ||
+        end > 86400000 || !text || text.length > 2000 || german.length > 2000) return null;
+    const startMs = Math.round(start), endMs = Math.round(end);
+    if (endMs <= startMs) return null;
+    const epoch = segment.timelineEpoch === undefined ? 0 : segment.timelineEpoch;
+    const revision = segment.revision === undefined ? 0 : segment.revision;
+    if (!Number.isSafeInteger(epoch) || epoch < 0 || !Number.isSafeInteger(revision) || revision < 0) return null;
     const cue = {
       id: String(segment.segmentId || ""),
       start: startMs,
       dur: Math.max(0, endMs - startMs),
       end: endMs,
       text,
-      revision: Number(segment.revision) || 0,
-      epoch: Number(segment.timelineEpoch) || 0,
+      revision,
+      epoch,
       provisional: !!segment.provisional,
       // A German rendering of a Chinese sentence is a translation, not the
       // uploader's caption, and it does not carry per-word times: the source
@@ -286,7 +331,30 @@
       // German pronunciation timing.
       sourceLang: String(segment.sourceLanguage || ""),
       backend: String(segment.translationBackend || ""),
+      // Empty on revisions without usable timing, so a text revision clears
+      // old words instead of retaining timings from a different transcript.
+      words: [],
+      wordTimingSource: "recognition",
+      rawOriginal: rawText(segment.rawOriginal || text),
+      uncertain: segment.uncertain === true,
+      uncertaintyReasons: Array.isArray(segment.uncertaintyReasons)
+        ? segment.uncertaintyReasons.filter(reason => ["low_log_probability", "possible_non_speech", "scores_unavailable", "low_word_probability"].includes(reason)) : [],
+      translationGroupIds: Array.isArray(segment.translationGroupIds)
+        ? segment.translationGroupIds.slice(0, 3).map(String) : [],
     };
+    if (!segment.provisional && Array.isArray(segment.words) && segment.words.length <= 256) {
+      let previous = startMs;
+      const words = [];
+      for (const word of segment.words) {
+        if (!word || !Number.isFinite(word.startMs) || !Number.isFinite(word.endMs) ||
+            word.startMs < previous || word.endMs <= word.startMs || word.endMs > endMs ||
+            !clampText(word.text) || !Number.isFinite(word.probability) ||
+            word.probability < 0.25 || word.probability > 1) { words.length = 0; break; }
+        words.push({ u: clampText(word.text), t: word.startMs, e: word.endMs, s: "recognition" });
+        previous = word.endMs;
+      }
+      cue.words = words;
+    }
     if (german && german !== text) {
       cue.trans = german;
       cue.translationFailed = !!segment.translationFailed;
@@ -298,7 +366,7 @@
       // The translation did not arrive. The cue still carries the recognized
       // original — never the other way round — and is marked so the caller can
       // retry it instead of showing an empty second line.
-      cue.translationFailed = true;
+      cue.translationFailed = !!segment.translationFailed;
     }
     return cue;
   }
@@ -312,20 +380,36 @@
    * second line, and an older revision that arrives late never overwrites a
    * newer one.
    */
+  const removedRevisions = new WeakMap();
   function mergeSegments(cues, segments) {
+    // Most polls carry status/metrics only. Preserve the list and its removal
+    // history without indexing, allocating or sorting the entire transcript.
+    if (!segments || !segments.length) return { cues: cues || [], added: 0, updated: 0 };
     const byId = new Map();
-    const order = [];
+    const tombstones = new Map(removedRevisions.get(cues) || []);
     for (const cue of cues || []) {
-      const key = cue.id || "start:" + cue.start;
-      if (!byId.has(key)) order.push(key);
+      const key = cue.epoch + ":" + (cue.id || "start:" + cue.start);
       byId.set(key, cue);
     }
     let added = 0;
     let updated = 0;
     for (const segment of segments || []) {
+      if (segment?.removed === true && typeof segment.segmentId === "string" &&
+          Number.isSafeInteger(segment.timelineEpoch) && segment.timelineEpoch >= 0 &&
+          Number.isSafeInteger(segment.revision) && segment.revision >= 0) {
+        const key = segment.timelineEpoch + ":" + segment.segmentId;
+        const existing = byId.get(key);
+        if (segment.revision > (tombstones.get(key) ?? -1) &&
+            (!existing || segment.revision > (existing.revision || 0))) {
+          tombstones.set(key, segment.revision);
+          if (existing) { byId.delete(key); updated += 1; }
+        }
+        continue;
+      }
       const cue = cueFromSegment(segment);
       if (!cue) continue;
-      const key = cue.id || "start:" + cue.start;
+      const key = cue.epoch + ":" + (cue.id || "start:" + cue.start);
+      if ((tombstones.get(key) ?? -1) >= cue.revision) continue;
       const existing = byId.get(key);
       if (existing) {
         // Keep the newer revision; drop a stale one rather than letting a late
@@ -335,22 +419,31 @@
         // asking for something that will never change.
         if ((existing.revision || 0) >= (cue.revision || 0)) continue;
         const merged = Object.assign({}, existing, cue);
-        if (!cue.trans && existing.trans) {
+        if (!cue.trans && existing.trans && cue.text === existing.text &&
+            cue.sourceLang === existing.sourceLang) {
           // A revision that only carries the original must not erase a
           // translation already shown for the same segment.
           merged.trans = existing.trans;
           merged.translationFailed = existing.translationFailed;
+        } else if (!cue.trans) {
+          delete merged.trans;
         }
         byId.set(key, merged);
         updated += 1;
       } else {
-        order.push(key);
         byId.set(key, cue);
         added += 1;
       }
     }
-    const list = order.map((key) => byId.get(key)).filter(Boolean);
+    while (tombstones.size > 10000) tombstones.delete(tombstones.keys().next().value);
+    if (!added && !updated) {
+      const list = cues || [];
+      removedRevisions.set(list, tombstones);
+      return { cues: list, added, updated };
+    }
+    const list = [...byId.values()];
     list.sort((a, b) => a.start - b.start || String(a.id).localeCompare(String(b.id)));
+    removedRevisions.set(list, tombstones);
     return { cues: list, added, updated };
   }
 
@@ -444,6 +537,18 @@
           HEALTH_TIMEOUT_MS
         );
       },
+      getSettings() {
+        return request(fetchImpl, url("/v1/settings"),
+          { method: "GET", headers: headers() }, REQUEST_TIMEOUT_MS);
+      },
+      updateSettings(patch) {
+        return request(fetchImpl, url("/v1/settings"),
+          { method: "POST", headers: headers(), body: JSON.stringify(patch) }, REQUEST_TIMEOUT_MS);
+      },
+      retrySegment(sessionId, segmentId, timelineEpoch) {
+        return request(fetchImpl, url("/v1/session/" + encodeURIComponent(sessionId) + "/retry"),
+          { method: "POST", headers: headers(), body: JSON.stringify({ segmentId, timelineEpoch }) }, REQUEST_TIMEOUT_MS);
+      },
       createSession(fields) {
         return request(
           fetchImpl,
@@ -513,7 +618,7 @@
    */
   async function recognize(options) {
     const client = createClient(options);
-    const cues = [];
+    let cues = [];
     const audio = options.audio || {};
     const log = typeof options.onEvent === "function" ? options.onEvent : () => {};
 
@@ -523,6 +628,7 @@
       captionAvailability: options.captionAvailability,
       sourceKind: options.sourceKind || "tab_capture",
       sourceLanguage: options.sourceLanguage || "auto",
+      translationTarget: options.translationTarget || "de",
       timelineEpoch: options.timelineEpoch || 0,
       audioStartMs: options.audioStartMs,
       playbackRate: options.playbackRate,
@@ -560,8 +666,7 @@
       status = response.status || status;
       translationBackend = response.translationBackend || translationBackend;
       const merged = mergeSegments(cues, response.segments);
-      cues.length = 0;
-      cues.push(...merged.cues);
+      cues = merged.cues;
       if (merged.added || merged.updated) {
         log({ type: "cues", cues: cues.slice(), added: merged.added, updated: merged.updated, status });
       }

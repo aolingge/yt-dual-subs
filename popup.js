@@ -15,6 +15,7 @@ const DEFAULTS = {
   // study aids (see the "study mode" section below)
   repeatCount: 0,              // 0 = off, N = play each sentence N times, -1 = loop
   studyRate: 0.75,             // playback rate used while repeating a sentence
+  autoPause: false,
   karaoke: true,               // prefer caption word times; optional labeled estimate
   karaokeApproximate: true,
   // where word times may come from: "auto" (captions, matching automatic captions,
@@ -22,8 +23,9 @@ const DEFAULTS = {
   // (verified local audio alignment as well)
   timingMode: "auto",
   karaokeBg: "#ffd65c",
-  karaokeTextColor: "#161616",
+  karaokeTextColor: "#ffffff",
   karaokeOpacity: 0.95,
+  karaokeStyleV2: false,
   wordLookup: true,            // translate a word after a short mouse hover
   revealMode: "always",        // translation visibility: "always" | "hover" | "manual"
   autoCaptions: true,          // turn YouTube's own CC on for you when the page loads
@@ -58,6 +60,7 @@ const DEFAULTS = {
   // the recognition controls stay disabled rather than probing a port that is
   // probably not there.
   bridgeBase: "",
+  recognitionLanguage: "auto",
   bridgeToken: ""
 };
 
@@ -106,6 +109,20 @@ function outlineShadow(strokeHex, strokeOpacity) {
 
 const $ = (id) => document.getElementById(id);
 let state = { ...DEFAULTS };
+let bridgeProbe = null;
+let bridgeSaving = Promise.resolve(true);
+
+function bridgeErrorText(code) {
+  const keys = {
+    permission_required: "recogPermissionRequired", invalid_base: "recogInvalidBase",
+    not_configured: "recogNotConfigured", offline: "recogOffline", timeout: "recogTimeout",
+    unauthorized: "recogUnauthorized", bad_response: "recogBadResponse",
+    captions_changed: "recogUnknownCaptions", no_page: "recogNoPage", busy: "recogOtherTab",
+    bridge_unreachable: "recogOffline", capture_ended: "recogCaptureEnded",
+    translation_target: "recogTranslationTarget"
+  };
+  return t(keys[code] || "recogFailed", "语音识别失败。");
+}
 let activeLine = "trans";        // which line the tab editor is bound to
 let exportVariant = "bi";        // SRT export content: "bi" | "orig" | "trans" (local, not stored)
 
@@ -114,6 +131,7 @@ let exportVariant = "bi";        // SRT export content: "bi" | "orig" | "trans" 
 // the extension origin, where site.js's own host detection says nothing, so the
 // adapter is chosen from the active tab's URL instead.
 let site = globalThis.YtdsSite ? YtdsSite.forPlatform("youtube") : null;
+let activeTab = null;
 let lastStatus = null;
 let biliNotice = '';   // one-off line in the Bilibili card, replaced by the next poll
 const toStore = (patch) => (site ? site.toStore(patch) : patch);
@@ -191,6 +209,7 @@ const LINE = {
 // ---- persistence ---------------------------------------------------------
 function setKey(key, val) {
   state[key] = val;
+  if (key === "enabled") paintEnabledControls();
   const o = {}; o[key] = val;
   persistSettings(o);
   paintPreview();
@@ -287,12 +306,26 @@ function paintExportSeg() {
 // Active tab id only — the tab id needs no "tabs" permission. We avoid reading
 // tab.url (which would) and instead detect a non-YouTube page by a null reply
 // from sendToTab (no content script there to answer).
+const studyTabValue = new URLSearchParams(location.search).get("studyTab");
+const STUDY_TAB_ID = studyTabValue !== null && /^\d+$/.test(studyTabValue) && Number.isSafeInteger(Number(studyTabValue))
+  ? Number(studyTabValue) : null;
 function getActiveTab() {
   return new Promise((resolve) => {
     try {
+      if (STUDY_TAB_ID !== null) {
+        chrome.tabs.get(STUDY_TAB_ID, tab => resolve(chrome.runtime.lastError ? null : tab));
+        return;
+      }
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (chrome.runtime.lastError) { resolve(null); return; }
-        resolve(tabs && tabs[0]);
+        if (!chrome.runtime.lastError && tabs && tabs[0]) { resolve(tabs[0]); return; }
+        // A popup normally has a current window. Background/page-based test
+        // hosts and some Chromium shells do not; active:true still identifies
+        // the user's tab without broad URL-reading permission.
+        try {
+          chrome.tabs.query({ active: true }, (fallback) => {
+            resolve((!chrome.runtime.lastError && fallback && fallback[0]) ? fallback[0] : null);
+          });
+        } catch (_e) { resolve(null); }
       });
     } catch (_e) { resolve(null); }
   });
@@ -310,6 +343,17 @@ function sendToTab(tabId, msg) {
 }
 
 // ---- page status ---------------------------------------------------------
+const pageStatusPending = new Map();
+function getPageStatus(tabId) {
+  if (tabId == null) return Promise.resolve(null);
+  if (pageStatusPending.has(tabId)) return pageStatusPending.get(tabId);
+  const pending = sendToTab(tabId, { type: "status" });
+  pageStatusPending.set(tabId, pending);
+  pending.finally(() => {
+    if (pageStatusPending.get(tabId) === pending) pageStatusPending.delete(tabId);
+  }).catch(() => {});
+  return pending;
+}
 // The content script answers {type:"status"} with a small snapshot of what the
 // video page is doing; this turns it into one readable line, so a blank or slow
 // translation line is explainable instead of mysterious.
@@ -372,9 +416,12 @@ function parseTracks(json) {
 function renderBiliCard(s) {
   const card = $("biliCard");
   if (!card) return;
-  const on = !!s && s.platform === "bilibili";
+  const isBilibiliVideo = !!site && site.isBilibili &&
+    (s ? !!s.videoId : !!(site.isBilibiliVideoUrl &&
+      site.isBilibiliVideoUrl(activeTab && activeTab.url)));
+  const on = isBilibiliVideo;
   card.hidden = !on;
-  if (!on) return;
+  if (!on || !s) return;
 
   const select = $("bbTrack");
   if (select) {
@@ -498,19 +545,21 @@ function recogGateText(s) {
 async function renderRecognizerCard(s, tabId) {
   const base = $("bridgeBase");
   const token = $("bridgeToken");
-  const state = s && s.recognitionState ? String(s.recognitionState) : "";
+  const recognitionState = s && s.recognitionState ? String(s.recognitionState) : "";
   // A capture belongs to one tab. Looking at another video must not show the
   // first one's session, and the stop button must belong to what is on screen.
   const background = await sendToBackground({ type: "recogStatus" });
   const recorder = (background && background.recorder) || null;
   const otherTab = !!(recorder && recorder.tabId != null && tabId != null && recorder.tabId !== tabId);
-  const shown = otherTab ? "" : state;
-  const running = shown === "running" || shown === "starting";
-  const configured = !!String((s && s.bridgeBase) || "").trim() &&
-    !!String((s && s.bridgeToken) || "").trim();
+  const shown = otherTab ? "" : recognitionState;
+  const running = ["running", "starting", "stopping", "degraded"].includes(shown);
+  const configured = !!String(state.bridgeBase || "").trim() &&
+    !!String(state.bridgeToken || "").trim();
 
-  if (base && base.value !== String((s && s.bridgeBase) || "")) base.value = String((s && s.bridgeBase) || "");
-  if (token && token.value !== String((s && s.bridgeToken) || "")) token.value = String((s && s.bridgeToken) || "");
+  if (base && document.activeElement !== base) base.value = state.bridgeBase || "";
+  if (token && document.activeElement !== token) token.value = state.bridgeToken || "";
+  if ($("recognitionLanguage")) $("recognitionLanguage").value = state.recognitionLanguage || "auto";
+  if ($("recognitionLanguage")) $("recognitionLanguage").disabled = running;
 
   const start = $("recogStart");
   const stop = $("recogStop");
@@ -518,7 +567,7 @@ async function renderRecognizerCard(s, tabId) {
   const gate = recogGateText(s);
   if (start) {
     start.hidden = running;
-    start.disabled = !configured || !gate || otherTab;
+    start.disabled = !configured || !!gate || otherTab || !bridgeProbe?.ok;
   }
   if (stop) stop.hidden = !running;
   if (test) test.disabled = !configured;
@@ -527,35 +576,114 @@ async function renderRecognizerCard(s, tabId) {
   if (el) {
     const parts = [];
     if (otherTab) parts.push(t("recogOtherTab", "另一个标签页正在识别，请先在那里停止。"));
-    else if (s && s.recognitionMessage) parts.push(String(s.recognitionMessage));
-    else if (gate) parts.push(gate);
+    else if (s && s.recognitionMessage) parts.push(bridgeErrorText(s.recognitionMessage));
     else if (running) parts.push(t("recogRunning", "正在识别当前标签页的音频…"));
     else if (shown === "failed") parts.push(t("recogFailed", "语音识别失败。"));
     else if (!configured) parts.push(t("recogNotConfigured", "先填写本机服务地址和令牌。"));
-    else parts.push(t("recogReady", "可以开始：该视频没有字幕轨。"));
+    else if (bridgeProbe) parts.push(bridgeProbe.text);
+    else parts.push(t("recogCheckFirst", "请先检查连接，再开始识别。"));
+    if (gate && !running && !otherTab) parts.push(gate);
+    if (running && !otherTab && recorder?.audioInput) {
+      const inputKeys = { paused: "recogInputPaused", waiting: "recogInputWaiting",
+        signal: "recogInputSignal", silent: "recogInputSilent", missing: "recogInputMissing",
+        suspended: "recogInputSuspended", waiting_media: "recogInputMediaWaiting" };
+      const key = inputKeys[recorder.audioInput.state];
+      if (key) parts.push(t(key, "正在检查音频输入。"));
+    }
+    if (running && !otherTab && recorder?.metrics) {
+      const m = recorder.metrics;
+      parts.push(t("recogQueue", "排队") + ": " + (m.queuedClips || 0) + "/" + (m.queuedTranslations || 0));
+      if (m.recognitionP95Ms !== undefined) parts.push(t("recogDecodeP95", "识别耗时 P95") + ": " + m.recognitionP95Ms + " ms");
+      if (m.translationP95Ms !== undefined) parts.push(t("recogTranslationP95", "翻译耗时 P95") + ": " + m.translationP95Ms + " ms");
+      const dropped = (recorder.dropped || 0) + (m.droppedClips || 0) + (m.droppedTranslations || 0);
+      if (dropped) parts.push(t("recogDropped", "已跳过任务") + ": " + dropped);
+      if (recorder.warning) parts.push(t("recogRuntimeWarning", "模型提示") + ": " + recorder.warning);
+    }
     const line = parts.filter(Boolean).join("　");
     if (el.textContent !== line) el.textContent = line;
     el.hidden = !line;
   }
 }
 
-// One connection probe, on demand: a green line here means the machine is
-// reachable and the token is right, which is the only thing that makes the
-// recognition button meaningful.
+// Health checks reachability/protocol; token authentication happens at start.
 async function onRecogTest() {
+  // Request only the configured loopback host, directly from this click.
+  let allowed = false;
+  try {
+    const base = YtdsBridge.baseUrlOf($("bridgeBase")?.value);
+    const url = new URL(base);
+    allowed = await chrome.permissions.request({ origins: [url.protocol + "//" + url.hostname + "/*"] });
+  } catch (_e) {
+    bridgeProbe = { ok: false, text: bridgeErrorText("invalid_base") };
+    refreshStatus();
+    return;
+  }
+  await onBridgeFieldChange();
+  if (!allowed || !await bridgeSaving) {
+    bridgeProbe = { ok: false, text: bridgeErrorText("permission_required") };
+    refreshStatus();
+    return;
+  }
+  const base = state.bridgeBase, token = state.bridgeToken;
   const el = $("recogStatus");
   if (el) { el.textContent = t("recogTesting", "正在检查本机服务…"); el.hidden = false; }
   const resp = await sendToBackground({ type: "recogHealth" });
+  if (state.bridgeBase !== base || state.bridgeToken !== token) return;
   if (!el) return;
   if (resp && resp.ok) {
     el.textContent = t("recogHealthOk", "已连接本机服务") +
       (resp.engine ? "（" + resp.engine + "）" : "") +
       (resp.languages && resp.languages.length ? " · " + resp.languages.join("/") : "");
+    el.textContent += " · " + t(resp.modelReady ? "recogModelReady" : "recogModelNotReady", "模型尚未就绪，启动时会尝试加载。");
+    el.textContent += " · " + t("recogTokenUnchecked", "令牌将在启动识别时验证。");
   } else {
     el.textContent = t("recogHealthFail", "连接失败：") +
-      String((resp && (resp.message || resp.code)) || "unreachable");
+      bridgeErrorText(resp?.code);
   }
+  bridgeProbe = { ok: !!resp?.ok, text: el.textContent };
+  refreshStatus();
   el.hidden = false;
+}
+
+async function onBridgeOptions(apply = false) {
+  const status = $("bridgeOptionsStatus");
+  const fields = $("bridgeOptionsFields");
+  const base = state.bridgeBase, token = state.bridgeToken;
+  const patch = apply ? {
+    modelProfile: $("bridgeModel").value,
+    chineseScript: $("bridgeScript").value,
+    hotwords: Object.fromEntries(["de", "en", "zh"].map(lang =>
+      [lang, $("bridgeWords" + lang[0].toUpperCase() + lang.slice(1)).value.replace(/[\r\n\t]+/g, " ").trim()])),
+    translationContext: $("bridgeSentenceContext").checked
+  } : null;
+  status.textContent = t("recogOptionsWorking", "正在处理本机设置…");
+  const resp = await sendToBackground({ type: "recogSettings", ...(patch ? { patch } : {}) });
+  if (state.bridgeBase !== base || state.bridgeToken !== token) return;
+  if (!resp?.ok || !resp.settings) {
+    status.textContent = resp?.code === "conflict"
+      ? t("recogOptionsBusy", "请先停止所有标签页的识别，再修改设置。")
+      : t("recogOptionsFailed", "设置未更新，请检查连接、令牌和桥版本。") + " (" + String(resp?.code || "bad_response") + ")";
+    return;
+  }
+  $("bridgeModel").textContent = "";
+  for (const profile of resp.profiles || []) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = profile.label;
+    $("bridgeModel").appendChild(option);
+  }
+  $("bridgeModel").value = resp.settings.modelProfile;
+  $("bridgeScript").value = resp.settings.chineseScript;
+  for (const lang of ["de", "en", "zh"]) {
+    $("bridgeWords" + lang[0].toUpperCase() + lang.slice(1)).value = resp.settings.hotwords?.[lang] || "";
+  }
+  $("bridgeSentenceContext").checked = !!resp.settings.translationContext;
+  const device = resp.device === "unloaded" ? t("recogDeviceUnloaded", "未加载，启动识别时加载")
+    : resp.device === "cuda" ? "CUDA" : resp.device === "cpu" ? "CPU" : t("recogDeviceUnknown", "尚未确定");
+  $("bridgeDevice").textContent = t("recogDevice", "运算设备") + ": " + device +
+    (resp.warning ? " · " + resp.warning : "");
+  fields.disabled = false;
+  status.textContent = apply ? t("recogOptionsApplied", "本机设置已应用。") : t("recogOptionsLoaded", "已载入；术语默认留空即可。");
 }
 
 async function onRecogStart() {
@@ -568,7 +696,7 @@ async function onRecogStart() {
     const el = $("recogStatus");
     if (el) {
       el.textContent = t("recogStartFail", "无法开始语音识别：") +
-        String((resp && (resp.message || resp.reason || resp.code)) || "failed");
+      bridgeErrorText(resp?.code || resp?.reason);
       el.hidden = false;
     }
   }
@@ -580,15 +708,17 @@ async function onRecogStop() {
   refreshStatus();
 }
 
-function onBridgeFieldChange() {
+async function onBridgeFieldChange() {
   const patch = {
     bridgeBase: String($("bridgeBase")?.value || "").trim(),
     bridgeToken: String($("bridgeToken")?.value || "").trim()
   };
-  if (state.bridgeBase === patch.bridgeBase && state.bridgeToken === patch.bridgeToken) return;
+  if (state.bridgeBase === patch.bridgeBase && state.bridgeToken === patch.bridgeToken) return bridgeSaving;
   state.bridgeBase = patch.bridgeBase;
   state.bridgeToken = patch.bridgeToken;
-  persistSettings(patch);
+  bridgeProbe = null;
+  bridgeSaving = persistSettings(patch);
+  await bridgeSaving;
   refreshStatus();
 }
 
@@ -603,23 +733,70 @@ function sendToBackground(msg) {
   });
 }
 
-async function refreshStatus() {
+function formatRecoveryTime(value) {
+  const at = Number(value);
+  if (!Number.isFinite(at) || at <= 0) return "";
+  try { return new Date(at).toLocaleString(); } catch (_e) { return ""; }
+}
+
+function renderRecoveryStatus(record) {
+  const status = $("recoveryStatus");
+  const detail = $("recoveryDetail");
+  if (!status || !detail) return;
+  if (!record || !record.state || record.state === "idle") {
+    status.textContent = t("recoveryNone", "尚无恢复记录");
+    detail.hidden = true;
+    detail.textContent = "";
+    return;
+  }
+  const stateKey = "recoveryState" + String(record.state).replace(/(^|-)([a-z])/g, (_m, _d, c) => c.toUpperCase());
+  status.textContent = t(stateKey, record.state);
+  const pieces = [];
+  const time = formatRecoveryTime(record.at);
+  if (time) pieces.push(time);
+  if (record.source) pieces.push(t("recoverySource", "触发：") + record.source);
+  if (record.tabId != null) pieces.push("tab " + record.tabId);
+  if (record.reason) pieces.push(t("recoveryReason", "原因：") + record.reason);
+  if (record.url) pieces.push(record.url);
+  detail.textContent = pieces.join(" · ");
+  detail.hidden = !detail.textContent;
+}
+
+async function refreshRecoveryStatus() {
+  const resp = await sendToBackground({ type: "recoveryStatus" });
+  renderRecoveryStatus(resp && resp.recovery);
+}
+
+let statusRefreshPending = null;
+function refreshStatus() {
+  if (statusRefreshPending) return statusRefreshPending;
+  const pending = refreshStatusNow();
+  statusRefreshPending = pending;
+  pending.finally(() => {
+    if (statusRefreshPending === pending) statusRefreshPending = null;
+  }).catch(() => {});
+  return pending;
+}
+
+async function refreshStatusNow() {
   const el = $("statusLine");
   if (!el) return;
   const tab = await getActiveTab();
-  const resp = (tab && tab.id != null)
-    ? await sendToTab(tab.id, { type: "status" }) : null;
+  activeTab = tab;
+  const resp = await getPageStatus(tab && tab.id);
   lastStatus = resp;
   el.textContent = statusText(resp);
   el.hidden = false;
   renderBiliCard(resp);
   await renderRecognizerCard(resp, tab && tab.id);
+  await refreshRecoveryStatus();
   const timing = $("karaokeStatus");
   const labels = {
     captions: t("karaokeStatusCaptions", "跟读：使用原字幕词时间"),
     automatic: t("karaokeStatusAutomatic", "跟读：已匹配同语言自动字幕词时间"),
     "automatic-partial": t("karaokeStatusAutomaticPartial", "跟读：部分词匹配自动字幕，其余为估算"),
     audio: t("karaokeStatusAudio", "跟读：使用音频对齐词时间"),
+    recognition: t("karaokeStatusRecognition", "跟读：使用语音识别词时间，可能存在误差"),
     estimated: t("karaokeStatusEstimated", "近似跟读：按音节、标点和本视频语速估算，不代表精确语音时间"),
     unavailable: t("karaokeStatusUnavailable", "此句无可靠词时间，显示完整句子"),
     waiting: t("karaokeStatusWaiting", "跟读：等待带有时间的原文字幕"),
@@ -641,8 +818,10 @@ async function refreshStatus() {
 }
 
 function startStatus() {
-  refreshStatus();
-  const timer = setInterval(refreshStatus, 1500);   // live while the popup is open
+  const refreshVisible = () => { if (!document.hidden) refreshStatus().catch(() => {}); };
+  refreshVisible();
+  const timer = setInterval(refreshVisible, 1500);
+  document.addEventListener("visibilitychange", refreshVisible);
   window.addEventListener("unload", () => clearInterval(timer));
 }
 
@@ -717,8 +896,28 @@ function bindLineControls() {
 }
 
 // ---- bind whole UI from state -------------------------------------------
+function paintEnabledControls() {
+  const mainSwitch = $("enabled");
+  if (mainSwitch) mainSwitch.checked = !!state.enabled;
+  const biliSwitch = $("bbEnabled");
+  if (biliSwitch) biliSwitch.checked = !!state.enabled;
+}
+
+async function platformForTab(tab) {
+  if (tab && tab.id != null) {
+    const status = await sendToTab(tab.id, { type: "status" });
+    if (status && (status.platform === "bilibili" || status.platform === "youtube")) {
+      return status.platform;
+    }
+  }
+  // URL is useful where the browser exposes it (for example in tests or with
+  // the tabs permission), but the content-script reply is the normal path: the
+  // extension deliberately does not request broad URL-reading permission.
+  return platformOfUrl(tab && tab.url);
+}
+
 function bindUI() {
-  $("enabled").checked = state.enabled;
+  paintEnabledControls();
   const targetSelect = $("targetLang");
   const listedTarget = Array.from(targetSelect.options).some((option) =>
     option.value === state.targetLang);
@@ -754,6 +953,7 @@ function paintWidthControl() {
 // ---- wire events ---------------------------------------------------------
 function wire() {
   $("enabled").addEventListener("change", (e) => setKey("enabled", e.target.checked));
+  $("bbEnabled").addEventListener("change", (e) => setKey("enabled", e.target.checked));
   $("targetLang").addEventListener("change", (e) => {
     const custom = e.target.value === "__custom__";
     $("targetLangCustomRow").hidden = !custom;
@@ -1027,7 +1227,15 @@ function showVersion() {
 // ---- boot ----------------------------------------------------------------
 YtdsSettings.onChanged((changes, area) => {
   if (area !== "sync") return;
-  const logical = fromStore(changes);
+  const logical = site ? site.logicalChanges(changes) : changes;
+  if ("autoPause" in logical) {
+    state.autoPause = logical.autoPause.newValue;
+    $("autoPause").checked = state.autoPause;
+  }
+  if ("enabled" in logical) {
+    state.enabled = logical.enabled.newValue === undefined ? DEFAULTS.enabled : logical.enabled.newValue;
+    paintEnabledControls(); paintPreview();
+  }
   if (!("overlayWidthPct" in logical)) return;
   state.overlayWidthPct = logical.overlayWidthPct.newValue || 0;
   paintWidthControl(); paintPreview();
@@ -1036,17 +1244,29 @@ applyI18n();                       // localize static markup before first paint
 (function boot() {
   // Settings are read and written for the site the user is actually looking at,
   // so changing a Bilibili video to German can never rewrite the YouTube choice.
-  getActiveTab().then((tab) => {
-    site = YtdsSite.forPlatform(platformOfUrl(tab && tab.url));
+  getActiveTab().then(async (tab) => {
+    await sendToBackground({ type: "getBridgeConfig" }); // finish legacy migration first
+    site = YtdsSite.forPlatform(await platformForTab(tab));
     YtdsSettings.get(toStore({ ...DEFAULTS, ...site.siteDefaults() }), (got) => {
       const stored = fromStore(got);
-      state = { ...DEFAULTS, ...site.siteDefaults(), ...stored };
+      const siteRepair = site.repairSettings(stored);
+      state = { ...DEFAULTS, ...site.siteDefaults(), ...stored, ...siteRepair };
+      if (Object.keys(siteRepair).length) persistSettings(siteRepair);
       // migrate legacy global bgOpacity onto per-line defaults
       if (typeof stored.bgOpacity === "number") {
         if (typeof stored.origBgOpacity !== "number") state.origBgOpacity = stored.bgOpacity;
         if (typeof stored.transBgOpacity !== "number") state.transBgOpacity = stored.bgOpacity;
       }
       showVersion();
+      activeTab = tab;
+      if (site.isBilibili) {
+        $("biliCard").hidden = !!(site.isBilibiliVideoUrl &&
+          !site.isBilibiliVideoUrl(tab && tab.url));
+        $("prevOrig").textContent = "今天我们来聊聊怎么学习德语。";
+        $("prevTrans").textContent = "Heute sprechen wir darüber, wie man Deutsch lernt.";
+        $("enabled").setAttribute("aria-label", t("bbEnableLabel", "在 B 站启用双语字幕"));
+        $("enabled").parentElement.title = t("bbEnableHint", "只影响 B 站，不影响 YouTube。");
+      }
       bindUI();
       wire();
       fillShortcuts();           // show the keys the browser actually assigned
@@ -1069,6 +1289,12 @@ applyI18n();                       // localize static markup before first paint
       if (recogStart) recogStart.addEventListener("click", onRecogStart);
       if (recogStop) recogStop.addEventListener("click", onRecogStop);
       if (recogTest) recogTest.addEventListener("click", onRecogTest);
+      $("bridgeLoad")?.addEventListener("click", () => onBridgeOptions(false));
+      $("bridgeApply")?.addEventListener("click", () => onBridgeOptions(true));
+      $("recognitionLanguage")?.addEventListener("change", () => {
+        state.recognitionLanguage = $("recognitionLanguage").value;
+        persistSettings({ recognitionLanguage: state.recognitionLanguage });
+      });
       for (const id of ["bridgeBase", "bridgeToken"]) {
         const field = $(id);
         if (field) field.addEventListener("change", onBridgeFieldChange);

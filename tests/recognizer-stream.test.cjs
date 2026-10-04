@@ -112,6 +112,93 @@ function fakeBridge(options) {
 
 const loaded = load();
 
+test('seek clears queued old audio and subtitles immediately and rejects late old results', () => {
+  const { session, updates } = newSession(fakeBridge(), new loaded.MediaClock());
+  session.observe({ mediaMs: 0, wallMs: 100000, rate: 1, paused: false });
+  session.consume({ revision: 1, segments: [segment()] });
+  session.pushPcm(silence(1), { atMs: 100000 });
+  session.observe({ mediaMs: 42000, wallMs: 101000, rate: 1, paused: false });
+  assert.equal(session.queued.length, 0);
+  assert.equal(session.cues.length, 0);
+  assert.equal(updates.at(-1).cues.length, 0);
+  session.consume({ revision: 2, segments: [segment({ revision: 2 })] });
+  assert.equal(session.revision, 2, 'cursor can advance without accepting old captions');
+  assert.equal(session.cues.length, 0);
+  session.consume({ revision: 3, segments: [segment({ timelineEpoch: 1, revision: 3 })] });
+  assert.equal(session.cues.length, 1);
+  assert.equal(session.cues[0].epoch, 1);
+});
+
+test('slow polls and flushes are coalesced instead of accumulating timer work', async () => {
+  const bridge = fakeBridge();
+  let release;
+  bridge.transcript = () => new Promise((resolve) => { release = resolve; });
+  const { session } = newSession(bridge, new loaded.MediaClock());
+  session.observe({ mediaMs: 0, wallMs: 100000, rate: 1, paused: false });
+  await session.start(); session.stopTimer();
+  const poll = session.poll(0);
+  await new Promise(setImmediate);
+  session.pushPcm(silence(1), { atMs: 100000 });
+  const flush = session.flush();
+  for (let i = 0; i < 20; i++) {
+    assert.equal(session.poll(0), poll);
+    assert.equal(session.flush(), flush);
+  }
+  assert.equal(bridge.calls.audio.length, 0);
+  release({ revision: 0, segments: [] });
+  await flush;
+  assert.equal(bridge.calls.audio.length, 1);
+});
+
+test('stopping drains all audio batches before finishing and closing exactly once', async () => {
+  const bridge = fakeBridge();
+  const order = [];
+  for (const key of ['sendAudio', 'finish', 'close']) {
+    const original = bridge[key];
+    bridge[key] = (...args) => { order.push(key); return original(...args); };
+  }
+  const { session } = newSession(bridge, new loaded.MediaClock());
+  session.observe({ mediaMs: 0, wallMs: 100000, rate: 1, paused: false });
+  await session.start(); session.stopTimer();
+  session.pushPcm(silence(20), { atMs: 100000 });
+  const [first, second] = await Promise.all([session.finish(), session.finish()]);
+  assert.equal(first, second, 'concurrent callers share the same completed result');
+  assert.deepEqual(order, ['sendAudio', 'sendAudio', 'finish', 'close']);
+  assert.equal(bridge.calls.audio.flatMap((batch) => batch.packets).length, 20);
+  assert.equal(session.queued.length, 0);
+});
+
+test('stopping during the opening handshake still closes the eventual bridge session', async () => {
+  const bridge = fakeBridge();
+  let release;
+  bridge.createSession = () => new Promise((resolve) => { release = resolve; });
+  const { session } = newSession(bridge, new loaded.MediaClock());
+  const opening = session.start();
+  await new Promise(setImmediate);
+  const finishing = session.finish();
+  release({ sessionId: 'abc12345deadbeef', recognize: true });
+  await opening; await finishing;
+  assert.deepEqual(bridge.calls.close, ['abc12345deadbeef']);
+  assert.equal(session.timer, null);
+});
+
+test('a failed in-flight batch after seek cannot requeue obsolete audio', async () => {
+  const bridge = fakeBridge();
+  let reject;
+  bridge.sendAudio = () => new Promise((_resolve, fail) => { reject = fail; });
+  const { session } = newSession(bridge, new loaded.MediaClock());
+  session.observe({ mediaMs: 0, wallMs: 100000, rate: 1, paused: false });
+  await session.start(); session.stopTimer();
+  session.pushPcm(silence(1), { atMs: 100000 });
+  const sending = session.flush();
+  await new Promise(setImmediate);
+  session.observe({ mediaMs: 42000, wallMs: 101000, rate: 1, paused: false });
+  reject(new Error('offline'));
+  await sending;
+  assert.equal(session.queued.length, 0);
+  assert.equal(session.flushFailures, 0);
+});
+
 function newSession(bridge, clock, extra) {
   let now = 100000;
   const updates = [];
@@ -414,4 +501,13 @@ test('a bridge that stops answering degrades and then reports failure', async ()
   session.stopTimer();
 });
 
-
+test('latency status is available before any cue and drops invalid metric fields', () => {
+  const bridge = fakeBridge();
+  const { session, states } = newSession(bridge, new loaded.MediaClock());
+  session.consume({ segments: [], metrics: { queuedClips: 2, recognitionP95Ms: 1234,
+    translationP95Ms: -3, privatePath: 'secret' }, warning: 'CPU fallback' });
+  assert.equal(states.at(-1).metrics.queuedClips, 2);
+  assert.equal(states.at(-1).metrics.recognitionP95Ms, 1234);
+  assert.equal(states.at(-1).metrics.translationP95Ms, undefined);
+  assert.equal(states.at(-1).metrics.privatePath, undefined);
+});

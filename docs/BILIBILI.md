@@ -111,14 +111,30 @@ text is always rendered as text, never as HTML.
 
 ## Settings are separate from YouTube
 
-Bilibili's target language and line order are stored under their own keys, so
+Bilibili's enable switch, target language and line order are stored under their own keys, so
 changing Bilibili to German leaves your YouTube setting exactly as it was, and
 the other way round.
 
 | | YouTube default | Bilibili default |
 | --- | --- | --- |
+| Enabled | your existing choice | **on**, saved independently |
 | Target language | your existing choice | **German (`de`)** |
 | Line order | original on top | **translation (German) on top** |
+
+In the popup's **哔哩哔哩** card, use **在 B 站启用双语字幕** to enable or
+disable this site. The header switch controls the same Bilibili setting while
+the active tab is Bilibili. Neither switch changes YouTube's enable setting.
+
+The small subtitle-box icon is in the player's **bottom-right control row**,
+beside the site's own buttons. Click it to show or hide the bilingual overlay;
+blue means on, grey means off. Its state survives refreshes, and it remains
+available when the overlay is off. The native control row owns its visibility
+and fullscreen layout. Rebuilding the row restores one button, not duplicates.
+
+On the first load after this fix, existing Bilibili language/order settings are
+restored once to **German above Chinese**; this also repairs a saved Chinese
+translation target that would show Chinese twice. Later changes remain editable.
+The original video picture and any captions burned into it are unchanged.
 
 The extension's **Fast display** mode uses YouTube's translated caption track.
 Bilibili has no such track, so on Bilibili the translation always goes through
@@ -240,6 +256,7 @@ YTDS_TRACKS=none  node tools/verify-bilibili.mjs   # captions, but none Chinese
 YTDS_TRACKS=empty node tools/verify-bilibili.mjs   # no caption track at all
 YTDS_SRT=1        node tools/verify-bilibili.mjs   # import a subtitle file
 YTDS_YOUTUBE=1    node tools/verify-bilibili.mjs   # the YouTube regression
+YTDS_CONTROLS=1   node tools/verify-bilibili.mjs   # old-setting repair, player toggle, reload and control rebuild
 YTDS_VIDEO=… YTDS_EDGE=… YTDS_EXT=… YTDS_PROFILE=… YTDS_CDP_PORT=… YTDS_REPORT=…
 ```
 
@@ -270,4 +287,8 @@ browser. Also unverified: the waiting/`need_login` path against a signed-in
 session, and restoring the site's own caption layer on the live page. YouTube's
 caption text was not observed in the same headless run (the player offered no
 captions there); its caption, timing and display paths are covered by the source
-suite instead.
+suite instead. The popup's Bilibili switch is covered by popup source/unit
+checks; a headless popup target does not expose the active-tab context needed
+for a truthful rendered-popup assertion. Enter-key activation is likewise not
+claimed from CDP because that environment does not consistently synthesize the
+browser's native button default action.

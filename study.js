@@ -7,8 +7,8 @@
   const MAX_CARDS = 1000;
   const $study = (id) => document.getElementById(id);
   let cards = [];
-  let cardsReady = false;
   let sourceVideoId = "";
+  let sourceSignature = "";
   let transcriptVideoId = "";
   let transcriptTitle = "";
   let transcriptLang = "auto";
@@ -41,7 +41,8 @@
 
   async function activeMessage(message) {
     const tab = await getActiveTab();
-    return tab && tab.id != null ? sendToTab(tab.id, message) : null;
+    return tab && tab.id != null
+      ? (message.type === "status" ? getPageStatus(tab.id) : sendToTab(tab.id, message)) : null;
   }
 
   function showSource(status) {
@@ -67,31 +68,39 @@
     }
   }
 
-  async function refreshSource() {
+  let sourceRefreshPending = null;
+  function refreshSource() {
+    if (sourceRefreshPending) return sourceRefreshPending;
+    const pending = refreshSourceNow();
+    sourceRefreshPending = pending;
+    pending.finally(() => {
+      if (sourceRefreshPending === pending) sourceRefreshPending = null;
+    }).catch(() => {});
+    return pending;
+  }
+
+  async function refreshSourceNow() {
     const status = await activeMessage({ type: "status" });
     showSource(status);
     const nextId = status && status.videoId ? status.videoId : "";
-    if (nextId !== sourceVideoId) {
+    const nextSignature = [nextId, status?.cueCount, status?.sourceLang, status?.targetLang, status?.cueSource, status?.manualTrack].join("|");
+    if (nextSignature !== sourceSignature) {
+      sourceSignature = nextSignature;
       sourceVideoId = nextId;
       if ($study("transcriptPanel").open) loadTranscript(true);
     }
   }
 
   async function loadCards() {
-    if (cardsReady) return;
-    const stored = await chrome.storage.local.get(STORE_KEY);
-    cards = Array.isArray(stored[STORE_KEY])
-      ? stored[STORE_KEY].filter((card) => card && typeof card.id === "string" &&
-          typeof card.videoId === "string" && typeof card.text === "string")
-      : [];
-    cardsReady = true;
-    renderSaved();
+    return mutateCards({ operation: "read" });
   }
 
-  async function storeCards(next) {
-    await chrome.storage.local.set({ [STORE_KEY]: next });
-    cards = next;
+  async function mutateCards(patch) {
+    const reply = await chrome.runtime.sendMessage({ type: "studyCards", ...patch });
+    if (!reply?.ok) throw new Error(reply?.code || "storage");
+    cards = reply.cards;
     renderSaved();
+    return reply;
   }
 
   async function exportCards() {
@@ -118,27 +127,26 @@
     }
   }
 
+  async function exportAnkiCards() {
+    try {
+      await loadCards();
+      if (!cards.length) { say(t("studyExportEmpty", "没有可导出的收藏。"), "err"); return; }
+      const blob = new Blob([YtdsStudyExport.toAnkiTsv(cards)], { type: "text/tab-separated-values;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "yt-dual-subs-anki-" + new Date().toISOString().slice(0, 10) + ".tsv";
+      document.body.appendChild(link);
+      link.click();
+      setTimeout(() => { URL.revokeObjectURL(url); link.remove(); }, 2000);
+      say(t("studyAnkiDone", "Anki 文件已下载；在 Anki 中选择「导入文件」，按表头映射字段。"), "ok");
+    } catch (_e) {
+      say(t("studyExportFailed", "导出收藏失败，请重试。"), "err");
+    }
+  }
+
   function readImportedCard(value) {
-    if (!value || typeof value !== "object") return null;
-    const videoId = value.videoId;
-    const text = value.text;
-    const start = Number(value.start);
-    const index = Number(value.index);
-    if (typeof videoId !== "string" || !/^[A-Za-z0-9_-]{8,20}$/.test(videoId) ||
-        typeof text !== "string" || !text.trim() || text.length > 1000 ||
-        typeof value.index !== "number" ||
-        !Number.isFinite(start) || start < 0 || !Number.isInteger(index) ||
-        index < 0) return null;
-    const title = typeof value.title === "string" ? value.title.slice(0, 300) : videoId;
-    const trans = typeof value.trans === "string" ? value.trans.slice(0, 2000) : "";
-    const savedAt = Number(value.savedAt);
-    return {
-      id: videoId + ":" + start + ":" + text,
-      videoId, title, sourceLang: typeof value.sourceLang === "string"
-        ? value.sourceLang.slice(0, 30) : "auto",
-      index, start, text, trans, known: value.known === true,
-      savedAt: Number.isFinite(savedAt) && savedAt > 0 ? savedAt : Date.now()
-    };
+    return YtdsStudyExport.readCard(value);
   }
 
   async function importCards(file) {
@@ -160,44 +168,34 @@
         say(t("studyImportInvalid", "这不是有效的收藏备份。"), "err");
         return;
       }
-      await loadCards();
-      const merged = new Map(cards.map((card) => [card.id, card]));
-      for (const card of imported) if (!merged.has(card.id)) merged.set(card.id, card);
-      if (merged.size > MAX_CARDS) {
-        say(t("studyImportFull", "导入后会超过收藏上限，未修改现有收藏。"), "err");
-        return;
-      }
-      const added = merged.size - cards.length;
-      await storeCards([...merged.values()]);
+      const { added } = await mutateCards({ operation: "import", cards: imported });
       say(t("studyImportDone", "已导入收藏") + " (" + added + ")", "ok");
-    } catch (_e) {
-      say(t("studyImportInvalid", "这不是有效的收藏备份。"), "err");
+    } catch (error) {
+      say(error.message === "full" ? t("studyImportFull", "导入后会超过收藏上限，未修改现有收藏。")
+        : error.message === "storage" ? t("studyStoreFailed", "保存失败，请重试。")
+        : t("studyImportInvalid", "这不是有效的收藏备份。"), "err");
     }
   }
 
-  function cardFromCue(cue, videoId, title, sourceLang) {
+  function cardFromCue(cue, videoId, title, sourceLang, platform) {
     return {
-      id: videoId + ":" + cue.start + ":" + cue.text,
-      videoId, title: title || videoId, sourceLang: sourceLang || "auto",
+      id: "ytds:" + videoId + ":" + cue.start + ":" + cue.index,
+      videoId, platform: platform || YtdsStudyExport.videoInfo(videoId)?.platform || "youtube",
+      title: title || videoId, sourceLang: sourceLang || "auto",
       index: cue.index, start: cue.start, text: cue.text,
-      trans: cue.trans || "", known: false, savedAt: Date.now()
+      trans: cue.trans || "", rawOriginal: cue.rawOriginal || cue.text || "",
+      uncertain: cue.uncertain === true, uncertaintyReasons: cue.uncertaintyReasons || [],
+      corrected: cue.corrected === true, known: false, savedAt: Date.now()
     };
   }
 
-  async function saveCue(cue, videoId, title, sourceLang) {
-    await loadCards();
-    const card = cardFromCue(cue, videoId, title, sourceLang);
-    const old = cards.find((item) => item.id === card.id);
-    if (!old && cards.length >= MAX_CARDS) {
-      say(t("studyLibraryFull", "收藏已满，请整理后再保存。"), "err");
-      return;
+  async function saveCue(cue, videoId, title, sourceLang, platform) {
+    const card = cardFromCue(cue, videoId, title, sourceLang, platform);
+    try { await mutateCards({ operation: "save", card }); }
+    catch (error) {
+      if (error.message !== "full") throw error;
+      say(t("studyLibraryFull", "收藏已满，请整理后再保存。"), "err"); return;
     }
-    const next = old
-      ? cards.map((item) => item.id === card.id
-        ? { ...card, known: item.known, savedAt: item.savedAt,
-            trans: card.trans || item.trans } : item)
-      : [card, ...cards];
-    await storeCards(next);
     say(t("studySavedDone", "已收藏，稍后可以回听复习。"), "ok");
   }
 
@@ -210,7 +208,7 @@
         say(t("studyNoSentence", "当前没有可收藏的字幕句，请先播放有字幕的视频。"), "err");
         return;
       }
-      await saveCue(result.cue, result.videoId, result.title, result.sourceLang);
+      await saveCue(result.cue, result.videoId, result.title, result.sourceLang, result.platform);
     } catch (_e) {
       say(t("studyStoreFailed", "收藏失败，请检查浏览器存储后重试。"), "err");
     } finally {
@@ -218,10 +216,10 @@
     }
   }
 
-  async function seekCue(videoId, index) {
-    const result = await activeMessage({ type: "studySeek", videoId, index });
+  async function seekCue(videoId, index, expectedStart) {
+    const result = await activeMessage({ type: "studySeek", videoId, index, expectedStart });
     if (result && result.ok) {
-      window.close();
+      if (STUDY_TAB_ID === null) window.close();
       return true;
     }
     say(t("studySeekFailed", "跳转失败，请刷新视频页面后重试。"), "err");
@@ -234,17 +232,57 @@
     const head = document.createElement("div");
     head.className = "study-item-head";
     head.textContent = timeLabel(entry.start) + "  ·  " + (entry.index + 1);
+    if (entry.corrected || entry.uncertain) {
+      head.textContent += " · " + (entry.corrected ? t("recogCorrected", "已校正") : t("recogReview", "识别待核对"));
+      head.classList.add("study-review");
+    }
+    if (entry.translationGroupIds?.length > 1) head.textContent += " · " + t("recogWholeSentence", "整句译文");
     const text = document.createElement("p");
     text.className = "study-item-text";
     text.textContent = entry.text;
     const actions = document.createElement("div");
     actions.className = "study-item-actions";
     actions.appendChild(button(t("studyPlay", "播放"), () =>
-      seekCue(transcriptVideoId, entry.index)));
+      seekCue(transcriptVideoId, entry.index, entry.start)));
     actions.appendChild(button(t("studySaveShort", "收藏"), () => {
       saveCue(entry, transcriptVideoId, transcriptTitle, transcriptLang)
         .catch(() => say(t("studyStoreFailed", "收藏失败，请检查浏览器存储后重试。"), "err"));
     }));
+    if (entry.recognized && entry.id) {
+      actions.appendChild(button(t("recogEdit", "校正"), () => {
+        if (row.querySelector(".study-edit")) return;
+        const original = document.createElement("textarea");
+        original.className = "study-edit"; original.maxLength = 2000; original.value = entry.text;
+        original.setAttribute("aria-label", t("recogEditOriginal", "校正原文"));
+        const translated = document.createElement("textarea");
+        translated.className = "study-edit"; translated.maxLength = 2000; translated.value = entry.trans || "";
+        translated.setAttribute("aria-label", t("recogEditTranslation", "校正译文"));
+        const hint = document.createElement("p"); hint.className = "pos-hint";
+        hint.textContent = t("recogEditHint", "校正保留到本页关闭，可收藏或导出；修改文字会清除旧词时间。原始识别：") + entry.rawOriginal;
+        const save = button(t("recogEditSave", "保存校正"), async () => {
+          const result = await activeMessage({ type: "studyCorrect", videoId: transcriptVideoId,
+            index: entry.index, expectedStart: entry.start, id: entry.id, epoch: entry.epoch,
+            text: original.value, trans: translated.value });
+          if (result?.ok) await loadTranscript(true);
+          else say(t("recogEditFailed", "字幕已变化或文字无效，请重新载入。"), "err");
+        });
+        const cancel = button(t("recogEditCancel", "取消"), () => {
+          for (const element of [original, translated, hint, save, cancel]) element.remove();
+        });
+        for (const element of [hint, original, translated, save, cancel]) row.appendChild(element);
+        original.focus();
+      }));
+      actions.appendChild(button(t("recogRetry", "重新识别此段"), async () => {
+        const tab = await getActiveTab();
+        const result = tab && await sendToBackground({ type: "recogRetry", tabId: tab.id,
+          videoId: transcriptVideoId, segmentId: entry.id, timelineEpoch: entry.epoch });
+        if (result?.ok) {
+          await activeMessage({ type: "studyClearCorrection", videoId: transcriptVideoId,
+            index: entry.index, expectedStart: entry.start, id: entry.id, epoch: entry.epoch });
+          say(t("recogRetryQueued", "已重新提交本机识别，稍后重新载入字幕列表。"), "ok");
+        } else say(t("recogRetryExpired", "片段已过期或识别已停止；可先播放回听，再重新启动识别。"), "err");
+      }));
+    }
     row.appendChild(head);
     row.appendChild(text);
     if (entry.trans) {
@@ -294,13 +332,12 @@
         type: "studySeek", videoId: card.videoId, index: card.index,
         expectedStart: card.start
       });
-      if (result && result.ok) { window.close(); return; }
+      if (result && result.ok) { if (STUDY_TAB_ID === null) window.close(); return; }
     }
-    const url = "https://www.youtube.com/watch?v=" +
-      encodeURIComponent(card.videoId) + "&t=" +
-      Math.max(0, Math.floor(card.start / 1000)) + "s";
+    const url = YtdsStudyExport.videoLink(card.videoId, card.start);
+    if (!url) { say(t("studySeekFailed", "跳转失败，请刷新视频页面后重试。"), "err"); return; }
     chrome.tabs.create({ url });
-    window.close();
+    if (STUDY_TAB_ID === null) window.close();
   }
 
   function renderSaved() {
@@ -346,8 +383,7 @@
       actions.appendChild(reveal);
       actions.appendChild(button(card.known
         ? t("studyReviewAgain", "重新复习") : t("studyMarkKnown", "标记掌握"), () => {
-        storeCards(cards.map((item) => item.id === card.id
-          ? { ...item, known: !item.known } : item))
+        mutateCards({ operation: "known", id: card.id, known: !card.known })
           .catch(() => say(t("studyStoreFailed", "保存失败，请重试。"), "err"));
       }));
       const remove = button(t("studyRemove", "移除"), () => {
@@ -356,7 +392,7 @@
           remove.textContent = t("studyConfirmRemove", "再次点击移除");
           return;
         }
-        storeCards(cards.filter((item) => item.id !== card.id))
+        mutateCards({ operation: "remove", id: card.id })
           .catch(() => say(t("studyStoreFailed", "保存失败，请重试。"), "err"));
       });
       actions.appendChild(remove);
@@ -386,6 +422,18 @@
   }
 
   $study("transcriptSearch").placeholder = t("studySearch", "搜索这段视频的句子");
+  $study("autoPause").addEventListener("change", event => setKey("autoPause", event.target.checked));
+  $study("studyOpen").addEventListener("click", async () => {
+    const tab = await getActiveTab();
+    if (tab?.id != null) chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") + "?studyTab=" + tab.id });
+  });
+  YtdsSettings.get({ autoPause: false }, saved => { $study("autoPause").checked = saved.autoPause; });
+  if (STUDY_TAB_ID !== null) {
+    document.body.classList.add("study-page");
+    $study("studyOpen").hidden = true;
+    $study("transcriptPanel").open = true;
+    $study("savedPanel").open = true;
+  }
   $study("studyPreset").addEventListener("click", applyStudyPreset);
   $study("saveSentence").addEventListener("click", saveCurrent);
   $study("transcriptPanel").addEventListener("toggle", () => {
@@ -397,6 +445,7 @@
   });
   $study("transcriptMore").addEventListener("click", () => loadTranscript(false));
   $study("studyExport").addEventListener("click", exportCards);
+  $study("studyAnkiExport").addEventListener("click", exportAnkiCards);
   $study("studyImportButton").addEventListener("click", () =>
     $study("studyImportFile").click());
   $study("studyImportFile").addEventListener("change", (event) => {
@@ -405,7 +454,12 @@
     event.target.value = "";
   });
   loadCards().catch(() => say(t("studyStoreFailed", "读取收藏失败，请重试。"), "err"));
-  refreshSource();
-  const statusTimer = setInterval(refreshSource, 3000);
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[STORE_KEY]) loadCards().catch(() => {});
+  });
+  const refreshVisible = () => { if (!document.hidden) refreshSource().catch(() => {}); };
+  refreshVisible();
+  const statusTimer = setInterval(refreshVisible, 3000);
+  document.addEventListener("visibilitychange", refreshVisible);
   window.addEventListener("unload", () => clearInterval(statusTimer));
 })();

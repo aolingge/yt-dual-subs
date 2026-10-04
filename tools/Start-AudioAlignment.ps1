@@ -20,10 +20,10 @@ if ($LASTEXITCODE -ne 0) {
 if ($SetupOnly) { Write-Output 'Audio alignment dependencies are ready.'; exit }
 if ($Foreground) { & $taskPython $taskServer; exit }
 $taskHealth = $null
-try { $taskHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 2 } catch { }
+try { $taskHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:8767/health' -TimeoutSec 2 } catch { }
 if ($taskHealth) {
-    if ($taskHealth.ok -and $taskHealth.version -eq 1) { Write-Output ('Audio alignment is already running (cache: ' + $taskHealth.cacheDir + ').'); exit }
-    throw 'Port 8765 is used by another program.'
+    if ($taskHealth.ok -and $taskHealth.service -eq 'yt-dual-subs-alignment' -and $taskHealth.version -ge 2) { Write-Output ('Audio alignment is already running (cache: ' + $taskHealth.cacheDir + ').'); exit }
+    throw 'Port 8767 is used by another program.'
 }
 $taskArguments = '"' + $taskServer + '"'
 $taskOutput = Join-Path $taskCache 'helper.log'
@@ -35,8 +35,8 @@ $taskProcess.Id | Set-Content -LiteralPath (Join-Path $taskCache 'helper.pid')
 $taskReady = $false
 for ($taskTry = 0; $taskTry -lt 20; $taskTry++) {
     Start-Sleep -Milliseconds 500
-    try { $taskHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 2 } catch { $taskHealth = $null }
-    if ($taskHealth -and $taskHealth.ok) { $taskReady = $true; break }
+    try { $taskHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:8767/health' -TimeoutSec 2 } catch { $taskHealth = $null }
+    if ($taskHealth -and $taskHealth.ok -and $taskHealth.service -eq 'yt-dual-subs-alignment' -and $taskHealth.version -ge 2) { $taskReady = $true; break }
     if ($taskProcess.HasExited) { break }
 }
 if (-not $taskReady) { throw ('Audio alignment did not start. See ' + $taskError + ' (cache: ' + $taskCache + ').') }

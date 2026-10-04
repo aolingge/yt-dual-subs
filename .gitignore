@@ -14,3 +14,6 @@ __pycache__/
 
 # Report written by tools/verify-bilibili.mjs — a local run artifact.
 tools/verify-bilibili-report.json
+tools/verify-bilibili-report-final.json
+tools/accuracy-*-latest.txt
+tools/study-security-report/

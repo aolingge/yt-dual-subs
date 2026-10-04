@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img alt="源码版本 3.11.0" src="https://img.shields.io/badge/source-3.11.0-3ea6ff" />
+  <img alt="源码版本 3.12.6" src="https://img.shields.io/badge/source-3.12.6-3ea6ff" />
   <a href="LICENSE"><img alt="MIT 开源许可" src="https://img.shields.io/badge/license-MIT-36a886" /></a>
   <img alt="Chrome 和 Edge 桌面浏览器" src="https://img.shields.io/badge/browser-Chrome%20%7C%20Edge-5c6bc0" />
   <img alt="无需 API 密钥" src="https://img.shields.io/badge/API%20key-not%20required-777777" />
@@ -113,7 +113,7 @@
 
 **更新时：**将新版文件覆盖到同一个扩展文件夹，在扩展管理页点击重新加载，然后**刷新已打开的 YouTube 标签页**。收藏句子保存在扩展本地；卸载前请[导出收藏备份](#隐私与数据)。
 
-当前源码为 **3.11.0**，包含：只有部分词能与自动字幕对应时仍然保留可靠词时间、跟随说话人局部语速的估算、明确的词时间模式（自动 / 近似跟读 / 音频对齐），以及真实的时间来源与音频对齐状态显示；另有可选的音频对齐跟读、字幕提前启动、字幕请求合并、可调高对比度高亮、自动恢复及设置合并保存。[最新发行包](https://github.com/aolingge/yt-dual-subs/releases/latest)仍为 **3.9.0**；要使用这些更新，请下载源码 ZIP 或使用 Git 克隆。可查看 [3.11.0 更新说明](docs/releases/v3.11.0.md#中文)。
+当前源码为 **3.12.6**：保留完整句子和原文标点，减轻逐词强调，合并并发状态查询，避免重建没有变化的识别字幕。此前 3.12.5 的稳定收藏卡片 ID 和本地翻译目标校验也已包含。这些修复不保证每段录音的文字错误率都降低，请查看[准确性证据](docs/ACCURACY.md)。本机音频对齐使用 **8767**；需要 Chromium **116 或以上**。查看 [3.12.6 更新说明](docs/releases/v3.12.6.md)、[性能检查](docs/PERFORMANCE.md)和[整合方案](docs/INTEGRATIONS.md)。
 
 浏览器官方教程：[Edge 本地加载扩展](https://learn.microsoft.com/en-us/microsoft-edge/extensions/getting-started/extension-sideloading) · [Chrome 加载已解压扩展](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world#load-unpacked)。
 
@@ -157,6 +157,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 | 调整字幕框宽度 | 拖动左右侧手柄，或使用**布局 → 字幕框宽度**。双击侧手柄恢复自动宽度。 |
 | 微调字幕同步 | **布局 → 字幕同步**，最多前后调整 2 秒；不改变 SRT 导出时间轴。 |
 | 导出字幕 | **导出字幕**，选择原文、译文或双语。 |
+| 导出 Anki | **收藏复习 → 导出到 Anki（TSV）**，包含原文、译文、视频编号、分 P、时间链接和学习标签；参见 [导入说明](docs/ANKI.md#中文)。 |
 
 快捷键可在 `edge://extensions/shortcuts` 或 `chrome://extensions/shortcuts` 修改。复读支持 **0.75×、0.6×、0.5×**，结束后恢复正常播放速度。
 
@@ -165,7 +166,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 <details>
 <summary><strong>为什么字幕没有显示？</strong></summary>
 
-先确认 YouTube 的 **CC / 设置 → 字幕** 菜单里有可用字幕轨。检查扩展已启用、字幕已开启，并刷新页面，尤其是刚更新过扩展时。弹窗顶部状态行会显示加载、备用模式或限流信息。视频没有字幕轨时，本扩展不能从音频生成字幕。
+先确认 YouTube 的 **CC / 设置 → 字幕** 菜单里有可用字幕轨。检查扩展已启用、字幕已开启，并刷新页面，尤其是刚更新过扩展时。弹窗顶部状态行会显示加载、备用模式或限流信息。确认当前视频没有可读取字幕轨后，可以配置本机识别服务，检查连接，再手动启动语音识别；字幕还在加载、读取失败或状态未知时不会开放识别。
 
 </details>
 
@@ -179,7 +180,7 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 <details>
 <summary><strong>能识别视频画面里自带的字幕吗？</strong></summary>
 
-不能。扩展使用 YouTube 字幕数据或播放器原生字幕文本，不做 OCR、语音识别，也无法移除已经烧录进画面的字幕。
+不能读取画面内烧录字幕。扩展优先使用 YouTube 或 Bilibili 的字幕轨，也可以在确认当前视频没有可读取字幕轨后，由用户手动启动本机语音识别；它不做 OCR，也无法移除已经烧录进画面的字幕。
 
 </details>
 
@@ -217,10 +218,14 @@ git clone https://github.com/aolingge/yt-dual-subs.git
 
 遇到问题可[提交 Issue](https://github.com/aolingge/yt-dual-subs/issues)，说明浏览器与扩展版本、字幕语言、翻译模式和复现步骤。有帮助时可附公开视频链接，请勿上传个人信息。
 
-欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.11.0 更新说明](docs/releases/v3.11.0.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
+欢迎参与改进。项目使用原生 JavaScript / CSS，无需构建。可查看[开发说明](docs/DEVELOPMENT.md)及 [3.12.1 更新说明](docs/releases/v3.12.1.md#中文)。如果它对你有用，欢迎点一个 Star，方便更多学习者找到它。
 
 ## 致谢与许可
 
 本仓库基于 [Gythiro/yt-dual-subs](https://github.com/Gythiro/yt-dual-subs)，继续加入多语言学习、悬停查词、响应式布局、字幕框拉伸，以及启动速度和字幕同步方面的改进。保留原作者版权声明。
 
 使用 [MIT 开源许可](LICENSE)。本项目独立开发维护，与 YouTube、Google、德语助手没有隶属关系。
+
+## 3.12.4 本机识别与核对
+
+模型与设备状态、简繁字形、分语言术语、整句翻译、字幕校正及单段重新识别已加入面板。详见[中文使用说明](docs/RECOGNITION_SETTINGS.md)。需要重载扩展并重启新版源码桥；旧 EXE 不会自动更新。

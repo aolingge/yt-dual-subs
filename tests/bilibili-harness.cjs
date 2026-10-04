@@ -120,12 +120,14 @@ function bilibiliDom({ captionText = '今天我们来聊聊怎么学习德语。
   video.currentTime = 1.5;
   const dmWrap = node('div', { className: 'bpx-player-dm-mask-wrap' });
   const controlWrap = node('div', { className: 'bpx-player-control-wrap' });
+  const controlsRight = node('div', { className: 'bpx-player-control-bottom-right' });
   const subtitlesButton = node('button', { className: 'bpx-player-ctrl-btn' });
   subtitlesButton.setAttribute('aria-label', '字幕');
   const subtitleWrap = node('div', { className: 'bpx-player-subtitle-wrap' });
   subtitleWrap.innerText = captionText;
   subtitleWrap.textContent = captionText;
-  controlWrap.appendChild(subtitlesButton);
+  controlsRight.appendChild(subtitlesButton);
+  controlWrap.appendChild(controlsRight);
   videoWrap.appendChild(video);
   player.appendChild(videoWrap);
   player.appendChild(dmWrap);
@@ -147,7 +149,7 @@ function bilibiliDom({ captionText = '今天我们来聊聊怎么学习德语。
     removeEventListener() {},
   };
 
-  return { document, documentElement, body, player, videoWrap, video, controlWrap, subtitlesButton, subtitleWrap };
+  return { document, documentElement, body, player, videoWrap, video, controlWrap, controlsRight, subtitlesButton, subtitleWrap };
 }
 
 // ---- isolated world: site.js ----------------------------------------------

@@ -84,6 +84,8 @@
     // study aids (see the "study mode" section below)
     repeatCount: 0,              // 0 = off, N = play each sentence N times, -1 = loop
     studyRate: 0.75,             // playback rate used while repeating a sentence
+    autoPause: false,
+    recognitionLanguage: "auto",
     karaoke: true,               // prefer caption word times; optional labeled estimate
     karaokeApproximate: true,
     // where word times may come from: "auto" (captions, matching automatic
@@ -91,8 +93,9 @@
     // model) | "audio" (verified local audio alignment as well)
     timingMode: "auto",
     karaokeBg: "#ffd65c",
-    karaokeTextColor: "#161616",
+    karaokeTextColor: "#ffffff",
     karaokeOpacity: 0.95,
+    karaokeStyleV2: false,
     wordLookup: true,            // translate a word after a short mouse hover
     revealMode: "always",        // translation visibility: "always" | "hover" | "manual"
     autoCaptions: true,          // turn YouTube's own CC on for you when the page loads
@@ -124,11 +127,6 @@
     // Bilibili only: the last track list the reader reported, as JSON, so the
     // popup can offer a manual switch without asking the page again.
     bbTracks: "",
-    // The local Deutsch Overlay bridge (speech recognition), if the user runs
-    // one. Both are needed: the base URL points at the machine, the token is
-    // the credential in the file the bridge wrote at startup.
-    bridgeBase: "",
-    bridgeToken: ""
   };
 
   // The small platform adapter (site.js). Everything that differs between
@@ -234,13 +232,15 @@
   // resets the ladder, so "fast" mode can recover by itself on a long video.
   let gtxCooldownUntil = 0;     // ms timestamp; gtx is skipped before this
   let gtxBackoffStep = 0;       // index into GTX_BACKOFF_MS
-  let cueTimer = null;       // currentTime-driven loop
+  let cueTimer = null;       // currentTime-driven loop (only while playing/visible)
+  let cueLoopActive = false; // cue mode remains active while its timer is paused
   let activeCueIdx = -1;     // index of currently shown cue
   let cueDirty = false;      // force exactly one tick (seek / paused settings change)
   let cueEpoch = 0;          // bumped each (re)start/teardown; invalidates in-flight gtx
   const transCache = new Map(); // key `${videoId} ${idx}` -> translated text
   const transInflight = new Map(); // cue idx -> epoch of its in-flight gtx request
   const transRetryAt = new Map(); // delay network-error retries, avoid a tick-rate burst
+  const TRANSLATION_CACHE_MAX = 600; // keep long tracks from retaining every sentence forever
   const PREFETCH_AHEAD = 3;     // keep gtx bursts small; the active cue goes first
   const PREFETCH_AHEAD_PENDING = 2; // narrower window while tlang is still loading
   const PENDING_GOOGLE_AFTER_MS = 350; // a brief head start, then warm the visible sentence
@@ -274,6 +274,9 @@
   let audioStaleRecord = false;  // a saved alignment belonged to other subtitles
   let audioJobState = "";        // "" | "running" | "done" | "failed"
   let activeWordIdx = -1;       // highlighted word index
+  // Very short intervals are not useful visual targets. Keep the sentence
+  // visible and leave the line unboxed instead of creating a one-word flash.
+  const MIN_WORD_HIGHLIGHT_MS = 120;
   let overlayResizeObserver = null;
   let overlayLayoutFrame = 0;
   let wordPopup = null;
@@ -290,7 +293,8 @@
   const WORD_LOOKUP_CACHE_MAX = 300;
 
   // fallback (rendered-scrape) mode
-  let pollTimer = null;
+  let pollTimer = null;       // rendered-caption poll (only while playing/visible)
+  let fallbackActive = false; // fallback mode remains active while its poll is paused
   let nativeCaptionObserver = null;
   let nativeCaptionPlayer = null;
   let nativeSkipText = null; // static native text still left over during SPA navigation
@@ -316,11 +320,16 @@
   let recogState = "";          // "" | "starting" | "running" | "stopping" | "failed"
   let recogMessage = "";        // human-readable reason, shown next to the button
   let recogCueCount = 0;
+  let recognizedTranslationEpoch = 0;
   let recognizedNoticeTimer = null;
+  // Corrections are local to this page session and survive model revisions.
+  const recognizedCorrections = new Map();
+  const correctionKey = cue => currentVideoId + "|" + cue.epoch + "|" + cue.id;
   // Capturing the tab for recognition needs to know where the video is, and
   // this page is the only place that knows. The reporter runs only while a
   // session is live; `video.currentTime` is the authority, never a clock here.
-  let mediaReportTimer = null;
+  let mediaReportTimer = null; // media reports (only while playing/visible)
+  let mediaReporterActive = false; // capture session remains live while timer is paused
   // Why capture may not start. "absent" is the only value that allows it:
   // "present" means the page has a usable caption track and recognition would
   // be a second, worse copy of it; "unknown" means nobody could prove there is
@@ -337,8 +346,15 @@
   // behaviour is unchanged. A reported reason is shown to the user instead of
   // a caption area that silently stays blank forever.
   let nocuesReason = "";
+  let nativeCaptionVerdict = CAPTIONS_UNKNOWN;
   let nocuesReasonText = "";
   let configNonce = 0;          // monotonic; echoed by inject.js to reject stale replies
+  let settingsLoaded = false;
+  let injectReady = false;
+  let injectHelloTimer = null;
+  let injectHelloAttempts = 0;
+  const INJECT_HELLO_MAX = 20;
+  const INJECT_HELLO_DELAY_MS = 250;
 
   // export (SRT download) bookkeeping
   let exportSeq = 0;                  // correlation id for export-request round-trips
@@ -353,9 +369,10 @@
   function captionAvailabilityState() {
     const tracks = parseTrackList(settings.bbTracks);
     if (tracks.length) return CAPTIONS_PRESENT;
+    if (cueSource === CUE_SOURCE_RECOGNIZED) return nativeCaptionVerdict;
     // The Bilibili reader only ever reports a reason when the video key has
     // already been resolved, so a foreign part's verdict can never leak here.
-    if (nocuesReason === "no_track" || nocuesReason === "not_chinese") return CAPTIONS_ABSENT;
+    if (nocuesReason === "no_track") return CAPTIONS_ABSENT;
     if (cueList && cueList.length) return CAPTIONS_PRESENT;
     if (displayCueList && displayCueList.length) return CAPTIONS_PRESENT;
     if (cueSource === CUE_SOURCE_RECOGNIZED && recogCueCount) return CAPTIONS_PRESENT;
@@ -385,6 +402,11 @@
       captionAvailability: captionAvailabilityState(),
       tracks: parseTrackList(settings.bbTracks),
       sourceLanguage: sourceLanguageForRecognition(),
+      // The bridge target is separate from the overlay's display target. The
+      // current local OPUS bridge produces German; the overlay may then show
+      // or further translate that line according to targetLang.
+      bridgeTranslationTarget: "de",
+      targetLang: settings.targetLang || "zh-CN",
       currentTimeMs: video ? Math.round(video.currentTime * 1000) : null,
       playbackRate: video ? Number(video.playbackRate) || 1 : 1,
       paused: video ? !!video.paused : true,
@@ -397,16 +419,12 @@
     };
   }
 
-  // Chinese source for a Chinese video: the model is told what it is hearing so
-  // the German translation runs in the right direction. Anything else is left
-  // on "auto" rather than guessed from the page's own settings.
+  // The spoken language is chosen explicitly or detected from the audio.
   function sourceLanguageForRecognition() {
-    if (SITE && SITE.isBilibili) return "zh";
-    const lang = String(cueSourceLang || "").toLowerCase();
-    if (lang.startsWith("zh")) return "zh";
-    if (lang.startsWith("en")) return "en";
-    if (lang.startsWith("de")) return "de";
-    return "auto";
+    // Neither the site's language nor the translation target identifies the
+    // language of a video without captions. Only an explicit choice locks it.
+    return ["zh", "de", "en"].includes(settings.recognitionLanguage)
+      ? settings.recognitionLanguage : "auto";
   }
 
   function loadSettings() {
@@ -416,7 +434,9 @@
       if (!extAlive()) { resolve(); return; }
       const apply = (stored) => {
         const { fontSizeRepair20260926, ...saved } = fromStore(stored);
-        settings = { ...SITE_DEFAULTS, ...saved };
+        const siteRepair = SITE && SITE.repairSettings ? SITE.repairSettings(saved) : {};
+        settings = { ...SITE_DEFAULTS, ...saved, ...siteRepair };
+        if (Object.keys(siteRepair).length) saveSettings(siteRepair);
         // Existing installations may have an enlarged 44px subtitle setting.
         // Repair it once; later changes through the popup remain the user's choice.
         if (!fontSizeRepair20260926) {
@@ -437,12 +457,14 @@
           if (typeof stored.origBgOpacity !== "number") settings.origBgOpacity = stored.bgOpacity;
           if (typeof stored.transBgOpacity !== "number") settings.transBgOpacity = stored.bgOpacity;
         }
+        settingsLoaded = true;
         resolve();
       };
       try {
         YtdsSettings.get(toStore({ ...SITE_DEFAULTS, fontSizeRepair20260926: false }), apply);
       } catch (_e) {
         extGone = true;
+        settingsLoaded = true;
         resolve();                      // keep DEFAULTS; the page still renders
       }
     });
@@ -475,14 +497,15 @@
     if (overlay) styleOverlay();   // position/fonts/colors/bg/stroke/sizes apply live
     // The sync offset decides which cue belongs on screen right now, so re-render
     // once (even while paused) instead of waiting for the next playback tick.
-    if ("offsetMs" in changes && cueTimer) {
+    if ("offsetMs" in changes && cueLoopActive) {
       cueDirty = true;
       cueTick();
     }
     // Study settings apply to the sentence playing right now, so react at once.
-    if ("repeatCount" in changes || "studyRate" in changes) {
+    if ("repeatCount" in changes || "studyRate" in changes || "autoPause" in changes) {
       if (!repeatTarget()) stopRepeat();
       else if (repeatCueIdx !== -1) startRepeat(repeatCueIdx);
+      syncCueTimer();
     }
     if ("revealMode" in changes) {
       revealShown = false;            // a new mode starts hidden again
@@ -491,7 +514,7 @@
     if ("wordLookup" in changes || "targetLang" in changes) hideWordLookup();
     if ("karaoke" in changes || "timingMode" in changes) {
       try {
-        window.postMessage({ source: "ytds-content", type: "word-timing-config",
+        window.postMessage({ source: "ytds-content", type: "word-timing-config", nonce: configNonce,
           useWordTiming: !!settings.karaoke,
           useAutoMatch: settings.timingMode !== "approximate" }, "*");
       } catch (_e) { /* ignore */ }
@@ -519,11 +542,11 @@
       tcueList = null;
       cueAligned = null;
       cueEpoch++;
-      if (cueTimer) {
+      if (cueLoopActive) {
         activeCueIdx = -1;          // force re-render of translation on next tick
         setTranslation("", "");
       }
-      if (pollTimer) {
+      if (fallbackActive) {
         lastReqToken++;             // old fallback translation is for stale settings
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = null;
@@ -617,7 +640,17 @@
   function ensureOverlay() {
     const player = getPlayer();
     if (!player) return null;
-    if (overlay && overlay.isConnected) return overlay;
+    const host = overlayHostEl() || player;
+    if (overlay && overlay.isConnected) {
+      // A BFCache restore can rebuild the player subtree while keeping the
+      // content-script object graph alive. Move the existing overlay to the
+      // current host instead of accumulating a second one.
+      if (overlay.parentElement !== host) {
+        try { host.appendChild(overlay); } catch (_e) { /* host is closing */ }
+        styleOverlay();
+      }
+      return overlay;
+    }
 
     overlay = document.createElement("div");
     overlay.id = "ytds-overlay";
@@ -661,7 +694,6 @@
     statusEl.classList.toggle("ytds-status-on", !!overlayStatus);
     overlay.appendChild(statusEl);
     // Attach to the video box rather than to the whole player area.
-    const host = overlayHostEl() || player;
     // The overlay is absolutely positioned, so its host must establish the
     // containing block. Only touch a host that does not already do so.
     if (host !== player) {
@@ -1166,7 +1198,7 @@
     // captions must remain filtered instead of leaking through an empty box.
     const hasText = (settings.showOriginal && !!lineText(origEl)) ||
       (settings.showTranslation && !!lineText(transEl));
-    const ownsTrack = !!cueTimer || !!(pollTimer && readNativeCaption(false));
+    const ownsTrack = cueLoopActive || !!(fallbackActive && readNativeCaption(false));
     document.documentElement?.classList.toggle("ytds-rendering",
       settings.enabled && !extGone && (hasText || ownsTrack));
   }
@@ -1240,6 +1272,7 @@
 
   function setOriginal(text) {
     if (!ensureOverlay()) return;
+    overlay.setAttribute("data-ytds-review", "");
     hideWordLookup();
     clearWordSpans();
     origEl.textContent = "";
@@ -1430,24 +1463,14 @@
   // speed. The measured intervals are collected once per caption track; each
   // sentence then prefers the pace measured near it and falls back to the
   // video-wide rate and finally to the language default.
-  let rateMemo = { list: null, lang: null, stamp: "", value: null };
-  // Word times can arrive long after the track did: audio alignment fills them
-  // into the sentences in place. Counting them makes that visible to the memo,
-  // so the pace is measured again instead of answering from the older estimate.
-  function paceStamp() {
-    let words = 0, sources = 0;
-    for (const cue of Array.isArray(displayCueList) ? displayCueList : []) {
-      if (Array.isArray(cue?.words)) words += cue.words.length;
-      if (cue && cue.wordTimingSource && cue.wordTimingSource !== "captions") sources++;
-    }
-    return words + ":" + sources;
-  }
-  function forgetPace() { rateMemo = { list: null, lang: null, stamp: "", value: null }; }
+  // New tracks replace the list; in-place audio/correction updates explicitly
+  // invalidate this memo. Reading it need not scan every cue on each sentence.
+  let rateMemo = { list: null, lang: null, value: null };
+  function forgetPace() { rateMemo = { list: null, lang: null, value: null }; }
   function videoPace() {
     const timing = window.YtdsWordTiming;
-    const stamp = paceStamp();
-    if (rateMemo.list !== displayCueList || rateMemo.lang !== cueSourceLang || rateMemo.stamp !== stamp) {
-      rateMemo = { list: displayCueList, lang: cueSourceLang, stamp,
+    if (rateMemo.list !== displayCueList || rateMemo.lang !== cueSourceLang) {
+      rateMemo = { list: displayCueList, lang: cueSourceLang,
         value: timing.pace ? timing.pace(displayCueList, cueSourceLang) : null };
     }
     return rateMemo.value;
@@ -1494,6 +1517,8 @@
 
   function setOriginalWithWords(cue) {
     if (!ensureOverlay()) return;
+    overlay.setAttribute("data-ytds-review", cue?.corrected ? t("recogCorrected", "已校正")
+      : cue?.uncertain ? t("recogReview", "识别待核对") : "");
     hideWordLookup();
     const plan = buildWordPieces(cue);
     if (!plan) {
@@ -1506,9 +1531,10 @@
     const partial = plan.source === "automatic-partial";
     overlay.classList.toggle("ytds-karaoke-estimated", plan.source === "estimated");
     overlay.classList.toggle("ytds-karaoke-partial", partial);
-    overlay.classList.toggle("ytds-karaoke-audio", plan.source === "audio");
+    overlay.classList.toggle("ytds-karaoke-audio", plan.source === "audio" || plan.source === "recognition");
     origEl.setAttribute("data-ytds-timing-label", plan.source === "audio"
       ? t("karaokeAudioBadge", "音频对齐")
+      : plan.source === "recognition" ? t("karaokeRecognitionBadge", "识别词时间")
       : partial ? t("karaokePartialBadge", "部分匹配 + 估算")
         : t("karaokeEstimatedBadge", "近似跟读"));
     origEl.textContent = "";              // drop the previous text/spans
@@ -1537,11 +1563,18 @@
   // Index of the word being spoken at display time t (offset already applied).
   function wordIdxAt(t) {
     if (!wordTimes || !wordTimes.length) return -1;
-    let ans = -1;
-    for (let i = 0; i < wordTimes.length; i++) {
-      if (wordTimes[i] <= t) ans = i; else break;
+    let lo = 0, hi = wordTimes.length - 1, ans = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (wordTimes[mid] <= t) { ans = mid; lo = mid + 1; }
+      else hi = mid - 1;
     }
-    return ans >= 0 && Number.isFinite(wordEnds?.[ans]) && t >= wordEnds[ans] ? -1 : ans;
+    if (ans < 0) return -1;
+    if (Number.isFinite(wordEnds?.[ans])) {
+      if (t >= wordEnds[ans]) return -1;
+      if (wordEnds[ans] - wordTimes[ans] < MIN_WORD_HIGHLIGHT_MS) return -1;
+    }
+    return ans;
   }
 
   function highlightWord(k) {
@@ -1566,16 +1599,21 @@
   // burned-in subtitles and the overlay would just overlap them.
   let toggleBtn = null;
   let controlsObserver = null;
+  let controlsRoot = null;
 
   function ensureToggleButton(retries) {
     const player = getPlayer();
+    if (player) observeControls(player);
     const rc = player && (SITE ? SITE.controlsHost(player)
                               : player.querySelector(".ytp-right-controls"));
     if (!rc) {                              // controls not ready yet — retry briefly
       if (retries > 0) setTimeout(() => ensureToggleButton(retries - 1), 500);
       return;
     }
-    if (toggleBtn && toggleBtn.isConnected) { updateToggleState(); return; }
+    if (toggleBtn && toggleBtn.isConnected) {
+      if (toggleBtn.parentElement !== rc) rc.insertBefore(toggleBtn, rc.firstChild);
+      updateToggleState(); return;
+    }
     toggleBtn = document.createElement("button");
     toggleBtn.className = SITE ? SITE.toggleButtonClass() : "ytp-button ytds-toggle notranslate";
     toggleBtn.type = "button";
@@ -1590,7 +1628,6 @@
     toggleBtn.addEventListener("click", onToggleClick, true);
     rc.insertBefore(toggleBtn, rc.firstChild);   // leftmost of the right group
     updateToggleState();
-    observeControls(rc);
   }
 
   function onToggleClick(e) {
@@ -1615,16 +1652,21 @@
     toggleBtn.title = label;
   }
 
-  // Re-inject the button if YouTube ever rebuilds/clears its right-controls.
-  function observeControls(rc) {
-    if (controlsObserver) return;
+  // The group may arrive late or be replaced together with the native controls.
+  // Observing the player also catches a whole group replacement, not just edits
+  // inside the old, detached group. Connected buttons make this a cheap check.
+  function observeControls(player) {
+    if (typeof MutationObserver === "undefined") return;
+    if (controlsRoot === player) return;
+    if (controlsObserver) controlsObserver.disconnect();
+    controlsRoot = player;
     controlsObserver = new MutationObserver(() => {
       if (!toggleBtn || !toggleBtn.isConnected) {
         toggleBtn = null;
         ensureToggleButton(0);
       }
     });
-    controlsObserver.observe(rc, { childList: true });
+    controlsObserver.observe(player, { childList: true, subtree: true });
   }
 
   // ---- auto-enable YouTube's caption track ---------------------------------
@@ -1714,8 +1756,27 @@
     return -1;                        // genuine gap
   }
 
+  // Background tabs and paused media do not need a clock-driven repaint. Keep
+  // the cue mode alive so a play/visibility event can resume it immediately.
+  function cueTimerAllowed() {
+    if (!cueLoopActive || (document.hidden && !settings.autoPause && !repeatTargetNow())) return false;
+    const video = getVideo();
+    return !video || (!video.paused && !video.ended);
+  }
+
+  function syncCueTimer() {
+    if (!cueLoopActive) return;
+    if (cueTimerAllowed()) {
+      if (!cueTimer) cueTimer = setInterval(cueTick, 60);
+    } else if (cueTimer) {
+      clearInterval(cueTimer);
+      cueTimer = null;
+    }
+  }
+
   function startCueLoop() {
     stopCueLoop();
+    cueLoopActive = true;
     stopRepeat();                     // a new loop must not inherit a slowed rate
     repeatDoneIdx = -1;
     activeCueIdx = -1;
@@ -1727,13 +1788,14 @@
     setOriginal("");
     setTranslation("", "");
     applyRevealState();
-    cueTimer = setInterval(cueTick, 60);
     cueDirty = true;                  // one tick even if we start paused/hidden
     cueTick();                        // render the active cue NOW (no blank frame)
+    syncCueTimer();
   }
 
   function stopCueLoop() {
     if (cueTimer) { clearInterval(cueTimer); cueTimer = null; }
+    cueLoopActive = false;
     activeCueIdx = -1;
   }
 
@@ -1828,6 +1890,25 @@
     startRepeat(idx);
   }
 
+  let autoPauseCue = null, autoPauseDone = null, autoPauseList = null;
+  function autoPauseTick(idx, video, time) {
+    if (!settings.autoPause || autoPauseList !== displayCueList) {
+      autoPauseCue = autoPauseDone = null;
+      autoPauseList = displayCueList;
+      if (!settings.autoPause) return false;
+    }
+    const previous = autoPauseCue;
+    if (previous && !video.paused && repeatCueIdx === -1 &&
+        time >= (Number(previous.lastEnd) || Number(previous.end) || previous.start + previous.dur)) {
+      autoPauseDone = previous;
+      autoPauseCue = null;
+      video.pause();
+      return true;
+    }
+    if (idx >= 0 && displayCueList[idx] !== autoPauseDone) autoPauseCue = displayCueList[idx];
+    return false;
+  }
+
   function cueTick() {
     if (!settings.enabled || !displayCueList) return;
     if (!extAlive()) { stopCueLoop(); return; }   // extension reloaded; stop quietly
@@ -1836,7 +1917,7 @@
     // Paused (or backgrounded) playback cannot change which line belongs on
     // screen, so skip the work — except for the single forced tick after a
     // seek, a video change or a settings change (cueDirty).
-    if ((video.paused || document.hidden) && !cueDirty) {
+    if ((video.paused || (document.hidden && !settings.autoPause && !repeatTargetNow())) && !cueDirty) {
       // Pausing to wait for a translation must not stop loading it.
       if (!document.hidden && activeCueIdx >= 0) prefetchFrom(activeCueIdx);
       return;
@@ -1851,7 +1932,10 @@
 
     // Study mode runs on EVERY tick: repeat has to notice the sentence END, and
     // the karaoke highlight moves while the same sentence stays on screen.
-    repeatTick(idx, video, t);
+    const mediaMs = video.currentTime * 1000;
+    const spokenIdx = activeCueIdxAt(mediaMs);
+    repeatTick(spokenIdx, video, mediaMs);
+    if (autoPauseTick(spokenIdx, video, video.currentTime * 1000)) return;
     if (idx >= 0 && idx === activeCueIdx) {
       if (translationPending && pendingGoogleAllowed()) gtxRequest(idx);
       prefetchFrom(idx);                  // fill released slots even within one sentence
@@ -1881,6 +1965,10 @@
 
   function renderTranslationForCue(idx, cue) {
     const origText = cue.text;
+    if (cueSource === CUE_SOURCE_RECOGNIZED) {
+      setTranslation(cue.trans || "", origText);
+      return; // Local recognition must not silently upload pending source text.
+    }
 
     if (translationPending) {
       // Fast mode races Google immediately; whole-track mode starts its Google
@@ -1975,6 +2063,9 @@
           gtxBackoffStep = 0;
           transRetryAt.delete(idx);
           transCache.set(key, resp.translated);
+          while (transCache.size > TRANSLATION_CACHE_MAX) {
+            transCache.delete(transCache.keys().next().value);
+          }
           // A reply can land between clock ticks or immediately after a seek.
           // Reconcile with the VIDEO clock before touching either visible line.
           const video = getVideo();
@@ -2000,6 +2091,9 @@
             resp.error + "); retrying in " + Math.round(wait / 1000) + "s");
         } else {
           transRetryAt.set(idx, Date.now() + 5000);
+          while (transRetryAt.size > TRANSLATION_CACHE_MAX) {
+            transRetryAt.delete(transRetryAt.keys().next().value);
+          }
         }
         // Other failures leave the cache empty for a later attempt.
       }
@@ -2016,6 +2110,7 @@
   // Window-bounded to stay gentle on the endpoint. Fast mode warms two upcoming
   // sentences immediately; whole-track mode does so after a 0.35s grace period.
   function prefetchFrom(startIdx) {
+    if (cueSource === CUE_SOURCE_RECOGNIZED) return;
     if (!settings.enabled || !displayCueList || gtxBlocked()) return;
     let ahead = PREFETCH_AHEAD;
     if (translationPending) {
@@ -2150,6 +2245,10 @@
   }
 
   function buildDisplayCues(rawCues) {
+    if (cueSource === CUE_SOURCE_RECOGNIZED) {
+      return rawCues.map(cue => ({ ...cue, trans: cue.trans || "", rawCount: 1,
+        transIncomplete: !cue.trans, lastStart: cue.start, lastEnd: cue.end }));
+    }
     const groups = [];
     let current = null;
     for (const cue of rawCues) {
@@ -2399,6 +2498,7 @@
       ? CUE_SOURCE_RECOGNIZED
       : (data.cueSource === CUE_SOURCE_IMPORT ? CUE_SOURCE_IMPORT : CUE_SOURCE_PAGE);
     cueSource = declaredSource;
+    if (declaredSource === CUE_SOURCE_PAGE && data.cues?.length) nativeCaptionVerdict = CAPTIONS_PRESENT;
     // A caption track is here now, so any earlier "why is there nothing"
     // message is no longer true.
     nocuesReason = "";
@@ -2485,7 +2585,7 @@
     const timer = setTimeout(() => {
       if (debounceTimer !== timer) return;
       debounceTimer = null;
-      if (!pollTimer || text !== lastSource || text === lastTransSource || fallbackInflight ||
+      if (!fallbackActive || text !== lastSource || text === lastTransSource || fallbackInflight ||
           gtxBlocked() || Date.now() < fallbackRetryAt) return;
       const token = lastReqToken;
       const pending = { token, text };
@@ -2495,7 +2595,7 @@
         (resp) => {
           const ownsSlot = fallbackInflight === pending;
           if (ownsSlot) fallbackInflight = null;
-          if (!extAlive() || !pollTimer) return;
+          if (!extAlive() || !fallbackActive) return;
           const rateLimited = resp && /\b429\b/.test(String(resp.error));
           // A changed sentence does not remove the endpoint's rate limit.
           if (ownsSlot && rateLimited) {
@@ -2530,7 +2630,7 @@
   }
 
   function fallbackTick() {
-    if (!settings.enabled) return;
+    if (!settings.enabled || !fallbackActive) return;
     if (!extAlive()) { stopFallback(); return; }  // extension reloaded; stop quietly
     if (!ensureOverlay()) return;       // document_start may precede the player
     watchNativeCaptions();
@@ -2566,10 +2666,27 @@
   }
 
   function startFallback() {
-    if (pollTimer) return;
+    if (fallbackActive) { syncFallbackTimer(); return; }
+    fallbackActive = true;
     ensureOverlay();
-    pollTimer = setInterval(fallbackTick, 120);
     fallbackTick();                       // do not wait for a timer or watchdog
+    syncFallbackTimer();
+  }
+
+  function fallbackTimerAllowed() {
+    if (!fallbackActive || document.hidden) return false;
+    const video = getVideo();
+    return !video || (!video.paused && !video.ended);
+  }
+
+  function syncFallbackTimer() {
+    if (!fallbackActive) return;
+    if (fallbackTimerAllowed()) {
+      if (!pollTimer) pollTimer = setInterval(fallbackTick, 120);
+    } else if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
   }
 
   function watchNativeCaptions() {
@@ -2584,7 +2701,7 @@
       return !!(el && (el.closest?.(selector) || (nested && el.querySelector?.(selector))));
     };
     nativeCaptionObserver = new MutationObserver((records) => {
-      if (!pollTimer) return;
+      if (!fallbackActive) return;
       // Ignore our own overlay writes; otherwise observing the player recurses.
       if (records.some((r) => containsCaption(r.target) ||
           [...r.addedNodes, ...r.removedNodes].some((n) => containsCaption(n, true)))) {
@@ -2600,6 +2717,7 @@
     nativeCaptionPlayer = null;
     nativeSkipText = null;
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    fallbackActive = false;
     if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
     lastSource = "";
     lastTransSource = "";
@@ -2612,7 +2730,24 @@
   function onNoCues(data) {
     if (data && data.videoId && data.videoId !== currentVideoId) return;
     if (data && typeof data.nonce === "number" && data.nonce !== configNonce) return;
-    const wasCueMode = !!cueList || !!cueTimer;
+    const reason = data?.reason || "";
+    nocuesReason = reason;
+    nativeCaptionVerdict = reason === "no_track" ? CAPTIONS_ABSENT : CAPTIONS_UNKNOWN;
+    if (captionAvailabilityState() !== CAPTIONS_ABSENT &&
+        ["starting", "running", "degraded"].includes(recogState)) {
+      recogState = "failed";
+      recogMessage = "captions_changed";
+      stopMediaReporter();
+      try { chrome.runtime.sendMessage({ type: "recognitionAbandoned", videoId: currentVideoId },
+        () => { void chrome.runtime.lastError; }); } catch (_e) {}
+    }
+    if (cueSource === CUE_SOURCE_RECOGNIZED) {
+      // The native reader may repeat an authoritative absence result. It says
+      // nothing about the ASR text already displayed for this same video.
+      if (reason === "no_track" && captionAvailabilityState() === CAPTIONS_ABSENT) return;
+      recogCueCount = 0;
+    }
+    const wasCueMode = !!cueList || cueLoopActive;
     nocuesFallback = true;
     stopCueLoop();
     if (wasCueMode) {
@@ -2809,30 +2944,60 @@
       // paint over the new video.
       return { ok: false, reason: "stale" };
     }
-    if (!data.cues.length) return { ok: false, reason: "empty" };
     // A real caption track appearing now outranks recognition. Recognition is
     // the fallback for videos that have nothing; the moment the page has
     // something, stacking the two would show two different sets of subtitles.
-    if (captionAvailabilityState() === CAPTIONS_PRESENT && cueSource !== CUE_SOURCE_RECOGNIZED) {
+    const availability = captionAvailabilityState();
+    if (availability !== CAPTIONS_ABSENT) {
       recogState = "failed";
-      recogMessage = "captions_appeared";
-      return { ok: false, reason: "captions_present" };
+      recogMessage = availability === CAPTIONS_PRESENT ? "captions_appeared" : "captions_changed";
+      stopMediaReporter();
+      try { chrome.runtime.sendMessage({ type: "recognitionAbandoned", videoId: currentVideoId },
+        () => { void chrome.runtime.lastError; }); } catch (_e) { /* stop remains available */ }
+      return { ok: false, reason: availability === CAPTIONS_PRESENT ? "captions_present" : "captions_unknown" };
     }
     const wasRecognized = cueSource === CUE_SOURCE_RECOGNIZED;
+    if (!data.cues.length) {
+      if (!wasRecognized) return { ok: false, reason: "empty" };
+      cueList = []; displayCueList = []; tcueList = null;
+      recogCueCount = 0; activeCueIdx = -1; cueDirty = true;
+      transCache.clear(); transInflight.clear(); transRetryAt.clear();
+      setOriginal(""); setTranslation("", "");
+      return { ok: true, count: 0 };
+    }
+    const displayTarget = String(settings.targetLang || "zh-CN");
+    const bridgeCues = data.cues.map(cue => ({
+      ...cue,
+      // The bridge's `trans` is German. Keep it as an internal intermediate
+      // value so a non-German display target can be translated without
+      // confusing the original recognition text with the final subtitle.
+      bridgeText: cue.trans || ""
+    }));
     const data2 = {
       videoId: currentVideoId,
       nonce: configNonce,
-      cues: data.cues,
+      cues: bridgeCues.map(cue => {
+        const correction = recognizedCorrections.get(correctionKey(cue));
+        const rendered = displayTarget.toLowerCase().startsWith("de")
+          ? cue
+          : { ...cue, trans: "", translationFailed: false };
+        return correction
+          ? { ...rendered, ...correction, words: [], wordTimingSource: "unavailable", corrected: true }
+          : rendered;
+      }),
       tcues: null,
       // The bridge already translated: the German rides on each cue, so the
-      // translation queue must not fetch it again. Word times are deliberately
-      // absent — a Chinese word time is not a German pronunciation time.
+      // translation queue must not fetch it again. Source word times belong
+      // only to the original line; translations never inherit them.
       aligned: true,
-      translationPending: false,
+      translationPending: !displayTarget.toLowerCase().startsWith("de"),
       sourceLang: data.sourceLang || "zh",
       cueSource: CUE_SOURCE_RECOGNIZED
     };
     onCues(data2);
+    if (!displayTarget.toLowerCase().startsWith("de")) {
+      scheduleRecognizedTranslations(bridgeCues, displayTarget, currentVideoId);
+    }
     recogCueCount = displayCueList ? displayCueList.length : data.cues.length;
     cueSource = CUE_SOURCE_RECOGNIZED;
     if (!wasRecognized) {
@@ -2845,6 +3010,40 @@
       }, 6000);
     }
     return { ok: true, count: recogCueCount };
+  }
+
+  // Recognition is produced by the local bridge as German. Reuse the normal
+  // translation queue for another visible target instead of silently showing
+  // German under a Chinese/English setting. Results are keyed by the stable
+  // bridge segment id and discarded after a new recognition batch or video.
+  function scheduleRecognizedTranslations(cues, targetLang, videoId) {
+    const epoch = ++recognizedTranslationEpoch;
+    const target = String(targetLang || "");
+    for (const cue of cues || []) {
+      // A missing bridge translation is a real failure state. Do not send the
+      // recognized original to a generic translator and accidentally turn a
+      // local pending transcript into a cloud request.
+      const source = String(cue.bridgeText || cue.trans || "").trim();
+      if (!source || !cue.id) continue;
+      askBackground(
+        { type: "translate", text: source, targetLang: target, sourceLang: "de" },
+        (resp) => {
+          if (epoch !== recognizedTranslationEpoch || currentVideoId !== videoId) return;
+          if (!resp?.ok || !resp.translated) return;
+          const current = cueList?.find(item => item && item.id === cue.id && item.epoch === cue.epoch);
+          // A saved manual correction is authoritative for both lines. The
+          // automatic target-language request may finish later, but it must
+          // never replace the learner's own wording.
+          if (!current || current.corrected) return;
+          current.trans = String(resp.translated).slice(0, 2000);
+          current.translationFailed = false;
+          computeCueEnds(cueList);
+          displayCueList = buildDisplayCues(cueList);
+          cueDirty = true;
+          cueTick();
+        }
+      );
+    }
   }
 
   // The popup asks before it offers the button, and the answer comes from the
@@ -2908,31 +3107,50 @@
   // Sent immediately, not on the next tick: a seek or a pause must reach the
   // recorder before the audio that follows it is stamped.
   function mediaEvent(type) {
-    if (!mediaReportTimer) return;
+    if (!mediaReporterActive) return;
     sendMediaReport({ event: type });
   }
 
+  function mediaTimerAllowed() {
+    if (!mediaReporterActive || document.hidden) return false;
+    const video = getVideo();
+    return !!video && !video.paused && !video.ended;
+  }
+
+  function syncMediaReportTimer() {
+    if (!mediaReporterActive) return;
+    if (mediaTimerAllowed()) {
+      if (!mediaReportTimer) mediaReportTimer = setInterval(() => {
+        // One video's audio is being captured, so a report from a different video
+        // is a lie about the audio being recognized. The page may navigate to the
+        // next video while the capture keeps running — stop and take the captions
+        // down instead of stamping the new timeline onto the old audio.
+        if (reportedVideoId !== currentVideoId) { abandonRecognition(); return; }
+        sendMediaReport({ event: "tick" });
+      }, MEDIA_REPORT_MS);
+    } else if (mediaReportTimer) {
+      clearInterval(mediaReportTimer);
+      mediaReportTimer = null;
+    }
+  }
+
   function startMediaReporter() {
-    if (mediaReportTimer) return;
+    if (mediaReporterActive) { syncMediaReportTimer(); return; }
+    mediaReporterActive = true;
     reportedVideoId = currentVideoId;
     sendMediaReport({ event: "start" });
-    mediaReportTimer = setInterval(() => {
-      // One video's audio is being captured, so a report from a different video
-      // is a lie about the audio being recognized. The page may navigate to the
-      // next video while the capture keeps running — stop and take the captions
-      // down instead of stamping the new timeline onto the old audio.
-      if (reportedVideoId !== currentVideoId) { abandonRecognition(); return; }
-      sendMediaReport({ event: "tick" });
-    }, MEDIA_REPORT_MS);
+    syncMediaReportTimer();
   }
 
   function stopMediaReporter() {
+    const wasActive = mediaReporterActive;
+    mediaReporterActive = false;
     if (mediaReportTimer) {
       clearInterval(mediaReportTimer);
       mediaReportTimer = null;
     }
     reportedVideoId = "";
-    sendMediaReport({ event: "stop" });
+    if (wasActive) sendMediaReport({ event: "stop" });
   }
 
   // The video behind a live capture changed (or a new part started). The audio
@@ -2959,8 +3177,9 @@
   // harnesses inject a document stand-in with no addEventListener, and losing
   // this subscription must not take the whole overlay down with it.
   function onPlaybackEvent(event) {
-    if (!mediaReportTimer) return;
+    if (!mediaReporterActive) return;
     mediaEvent(event.type);
+    syncMediaReportTimer();
   }
   const playbackEventTarget =
     document && typeof document.addEventListener === "function" ? document : window;
@@ -2971,6 +3190,7 @@
   // Forgetting recognition puts the page's own path back in charge, exactly as
   // clearing an imported file does.
   function handleClearRecognized() {
+    recognizedTranslationEpoch++;
     recogCueCount = 0;
     stopMediaReporter();
     if (cueSource === CUE_SOURCE_RECOGNIZED) {
@@ -2993,8 +3213,8 @@
   // of mysterious.
   function pageStatus() {
     let mode = "off";
-    if (cueTimer) mode = "cues";
-    else if (pollTimer) mode = "scrape";
+    if (cueLoopActive) mode = "cues";
+    else if (fallbackActive) mode = "scrape";
 
     let transSource = "none";
     const cue = (activeCueIdx >= 0 && displayCueList)
@@ -3005,7 +3225,7 @@
       else if (transCache.has(cueVideoId + " " + activeCueIdx)) transSource = "google";
       else if (translationPending) transSource = "waiting";
       else transSource = "google";
-    } else if (pollTimer) {
+    } else if (fallbackActive) {
       transSource = lastTransSource ? "google" : "waiting";
     }
 
@@ -3045,10 +3265,6 @@
       recognitionState: recogState,
       recognitionMessage: recogMessage,
       recognitionCueCount: recogCueCount,
-      // The popup's recognition card reads the configured endpoint back from
-      // here so the fields always match what recognition will actually use.
-      bridgeBase: settings.bridgeBase || "",
-      bridgeToken: settings.bridgeToken || "",
       pending: !!translationPending,
       cached: !!usedVideoCache,
       cooldownSec: Math.max(0, Math.ceil((gtxCooldownUntil - Date.now()) / 1000))
@@ -3074,7 +3290,13 @@
       index,
       start: cue.start,
       text: cue.text,
-      trans: activeText || (!cue.transIncomplete ? cue.trans : "") || cached || ""
+      trans: activeText || (!cue.transIncomplete ? cue.trans : "") || cached || "",
+      id: cue.id || "", epoch: cue.epoch || 0,
+      recognized: cueSource === CUE_SOURCE_RECOGNIZED,
+      uncertain: !!cue.uncertain, corrected: !!cue.corrected,
+      rawOriginal: cue.rawOriginal || cue.text,
+      uncertaintyReasons: cue.uncertaintyReasons || [],
+      translationGroupIds: cue.translationGroupIds || []
     };
   }
 
@@ -3124,6 +3346,37 @@
       sendResponse({ ok: true, audioJob: audioJobState });
       return;
     }
+    if (msg.type === "studyCorrect" || msg.type === "studyClearCorrection") {
+      const cue = displayCueList?.[Number(msg.index)];
+      if (cueSource !== CUE_SOURCE_RECOGNIZED || msg.videoId !== currentVideoId || !cue ||
+          cue.id !== msg.id || cue.epoch !== msg.epoch || cue.start !== msg.expectedStart) {
+        sendResponse({ ok: false, reason: "changed" }); return;
+      }
+      const key = correctionKey(cue);
+      if (msg.type === "studyClearCorrection") {
+        recognizedCorrections.delete(key);
+        sendResponse({ ok: true }); return;
+      }
+      const text = typeof msg.text === "string" ? msg.text.trim() : "";
+      const trans = typeof msg.trans === "string" ? msg.trans.trim() : "";
+      if (!text || text.length > 2000 || trans.length > 2000) {
+        sendResponse({ ok: false, reason: "invalid_text" }); return;
+      }
+      const correction = { text, trans, uncertain: false, corrected: true };
+      recognizedCorrections.set(key, correction);
+      if (recognizedCorrections.size > 500) recognizedCorrections.delete(recognizedCorrections.keys().next().value);
+      for (const list of [cueList, displayCueList]) {
+        for (const item of list || []) {
+          if (item.id === cue.id && item.epoch === cue.epoch) {
+            Object.assign(item, correction, { words: [], wordTimingSource: "unavailable", transIncomplete: !trans });
+          }
+        }
+      }
+      transCache.clear();
+      forgetPace();
+      activeCueIdx = -1; cueDirty = true; cueTick();
+      sendResponse({ ok: true }); return;
+    }
     if (msg.type === "studyCues") {
       if (!displayCueList || !displayCueList.length) {
         sendResponse({ ok: false, reason: "nocue" });
@@ -3154,7 +3407,8 @@
         : -1;
       const cue = studyEntry(index);
       sendResponse(cue
-        ? { ok: true, videoId: currentVideoId, title: videoTitle(),
+        ? { ok: true, platform: SITE && SITE.isBilibili ? "bilibili" : "youtube",
+            videoId: currentVideoId, title: videoTitle(),
             sourceLang: cueSourceLang, cue }
         : { ok: false, reason: "nocue" });
       return;
@@ -3512,6 +3766,12 @@
     if (evt.source !== window) return;
     const d = evt.data;
     if (!d || d.source !== "ytds-inject") return;
+    if (d.type === "ready") {
+      injectReady = true;
+      stopInjectHandshake();
+      if (settings.enabled) sendConfig();
+      return;
+    }
     // Export replies are handled even when the overlay is disabled (they are a
     // direct response to a user-initiated download, not the live cue stream).
     if (d.type === "exportdata") { resolveExportData(d); return; }
@@ -3543,6 +3803,7 @@
     const next = JSON.stringify(json);
     if (next === String(settings.bbTracks || "")) return;
     settings.bbTracks = next;
+    if (json.length && ["running", "starting", "degraded"].includes(recogState)) abandonRecognition();
     if (SITE && SITE.isBilibili) saveSettings({ bbTracks: next });
   }
 
@@ -3557,6 +3818,8 @@
   }
 
   function sendConfig() {
+    if (!settingsLoaded) return;
+    if (!injectReady) startInjectHandshake();
     try {
       const nonce = ++configNonce;
       window.postMessage({
@@ -3575,6 +3838,31 @@
         nonce
       }, "*");
     } catch (_e) { /* ignore */ }
+  }
+
+  function stopInjectHandshake() {
+    if (injectHelloTimer !== null) {
+      clearTimeout(injectHelloTimer);
+      injectHelloTimer = null;
+    }
+    injectHelloAttempts = 0;
+  }
+
+  function startInjectHandshake() {
+    if (!settingsLoaded || !settings.enabled || injectReady || injectHelloTimer !== null ||
+        (SITE && SITE.isBilibili)) return;
+    const hello = () => {
+      injectHelloTimer = null;
+      if (!settingsLoaded || !settings.enabled || injectReady || !extAlive()) return;
+      try {
+        window.postMessage({ source: "ytds-content", type: "hello" }, "*");
+      } catch (_e) { return; }
+      injectHelloAttempts++;
+      if (injectHelloAttempts < INJECT_HELLO_MAX) {
+        injectHelloTimer = setTimeout(hello, INJECT_HELLO_DELAY_MS);
+      }
+    };
+    hello();
   }
 
   // =========================================================================
@@ -3600,11 +3888,13 @@
     activeCueIdx = -1;
     nocuesFallback = false;
     nocuesReason = "";
+    nativeCaptionVerdict = CAPTIONS_UNKNOWN;
     nocuesReasonText = "";
     clearHoverReveal();
     transInflight.clear();
     transRetryAt.clear();
     cueEpoch++;                       // invalidate any in-flight gtx callbacks
+    if (!settings.enabled) stopInjectHandshake();
   }
 
   function applyStateToDom(requestCues = true) {
@@ -3615,9 +3905,56 @@
     } else {
       // Native captions bridge startup immediately; cue mode takes over once ready.
       ensureOverlay();
-      if (!cueTimer) startFallback();
+      if (!cueLoopActive) startFallback();
       if (requestCues) sendConfig();
     }
+  }
+
+  // BFCache restores the document without rerunning document_start content
+  // scripts. The player may nevertheless have been rebuilt while the old
+  // content-script state survived, so repair the DOM first and then re-arm the
+  // page bridge. The bounded retries cover a player that appears a moment after
+  // pageshow without creating another background polling loop.
+  function recoverFromPageShow(event, attempt = 0) {
+    if (!extAlive()) return;
+    if (!settingsLoaded || !document.documentElement || (settings.enabled && !getPlayer())) {
+      if (attempt < 2) {
+        const delays = [0, 250, 1000];
+        setTimeout(() => recoverFromPageShow(event, attempt + 1), delays[attempt + 1]);
+      }
+      return;
+    }
+
+    ensureToggleButton(10);
+    document.documentElement.classList.toggle("ytds-active", !!settings.enabled);
+    if (!settings.enabled) {
+      teardownAll();
+      return;
+    }
+
+    // Do this before any network/config work so a restored page never waits for
+    // a translation request just to make the control and overlay visible.
+    ensureOverlay();
+    styleOverlay();
+    if (!cueLoopActive) {
+      const restored = restoreCachedCues();
+      if (restored) stopFallback();
+      else if (!fallbackActive) startFallback();
+    } else {
+      cueDirty = true;
+      cueTick();
+    }
+    scheduleOverlayLayout();
+    startInjectHandshake();
+    sendConfig();
+    syncCaptions();
+  }
+
+  function onPageShow(event) {
+    // `persisted` is the signal for a BFCache restore. Running the same repair
+    // for an ordinary pageshow also covers browser-specific session restore
+    // paths that do not expose BFCache as persisted.
+    recoverFromPageShow(event, 0);
   }
 
   function onNav() {
@@ -3625,12 +3962,15 @@
     currentVideoId = videoIdFromLocation();
     transCache.clear();
     weEnabledCC = false;        // fresh video — re-evaluate caption state
+    // A hidden/paused tab may have no media report timer, but the recognition
+    // session is still live. Drop it before the new video is configured.
+    if (mediaReporterActive) abandonRecognition();
     teardownAll();
     ensureToggleButton(10);     // control-bar toggle persists across videos
     if (settings.enabled) {
       ensureOverlay();
       restoreCachedCues();      // already watched: paint immediately, then refresh
-      if (!cueTimer) {
+      if (!cueLoopActive) {
         nativeSkipText = staleNative || null;
         startFallback();
       }
@@ -3651,7 +3991,8 @@
   // listener on window still sees them; the tick itself is skipped while paused
   // unless cueDirty is set here.
   function onPlaybackJump(event) {
-    if (pollTimer && (event?.type === "seeking" || event?.type === "seeked")) {
+    if (event?.type === "seeking" || event?.type === "seeked") autoPauseCue = autoPauseDone = null;
+    if (fallbackActive && (event?.type === "seeking" || event?.type === "seeked")) {
       lastReqToken++;
       fallbackInflight = null;
       fallbackRetryAt = 0;
@@ -3660,7 +4001,10 @@
     }
     cueDirty = true;
     cueTick();
-    if (pollTimer) fallbackTick();
+    if (fallbackActive) fallbackTick();
+    syncCueTimer();
+    syncFallbackTimer();
+    syncMediaReportTimer();
   }
 
   // single listener instances (added once; never accumulate)
@@ -3669,10 +4013,19 @@
   window.addEventListener("message", onInjectMessage, false);
   window.addEventListener("seeked", onPlaybackJump, true);
   window.addEventListener("seeking", onPlaybackJump, true);
+  window.addEventListener("timeupdate", () => {
+    if (document.hidden && settings.autoPause) cueTick();
+  }, true);
   window.addEventListener("play", onPlaybackJump, true);
   window.addEventListener("playing", onPlaybackJump, true);
+  window.addEventListener("pause", onPlaybackJump, true);
+  window.addEventListener("ended", onPlaybackJump, true);
+  window.addEventListener("ratechange", onPlaybackJump, true);
   window.addEventListener("loadedmetadata", onPlaybackJump, true);
-  window.addEventListener("visibilitychange", onPlaybackJump, true);
+  window.addEventListener("pageshow", onPageShow, true);
+  // visibilitychange is dispatched on document in browsers; the fallback
+  // target keeps lightweight harnesses that only expose window compatible.
+  playbackEventTarget.addEventListener("visibilitychange", onPlaybackJump, true);
   window.addEventListener("pointermove", onPointerMove, true);
   window.addEventListener("pointerout", onWindowPointerOut, true);
   window.addEventListener("resize", scheduleOverlayLayout, true);

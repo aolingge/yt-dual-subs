@@ -31,10 +31,14 @@ const DEFAULT_EDGE = process.platform === "win32"
 const EDGE = process.env.YTDS_EDGE || DEFAULT_EDGE;
 const EXT = process.env.YTDS_EXT || path.resolve(HERE, "..");
 const PROFILE = process.env.YTDS_PROFILE
-  || path.join(os.tmpdir(), "ytds-edge-profile");
+  || path.join(os.tmpdir(), "ytds-edge-profile-" + process.pid + "-" + Date.now());
 const PORT = Number(process.env.YTDS_CDP_PORT || 9333);
 const REAL_VIDEO = process.env.YTDS_VIDEO || "https://www.bilibili.com/video/BV1GJ411x7h7/";
 const REPORT = process.env.YTDS_REPORT || path.join(HERE, "verify-bilibili-report.json");
+const CHECK_CONTROLS = process.env.YTDS_CONTROLS === "1";
+// Headless browsers can still send real audio to the workstation's speakers.
+// Mute only this isolated browser; retain media decoding and playback timing.
+const AUDIBLE_TEST = process.env.YTDS_TEST_AUDIO === "1";
 
 const log = (...a) => console.log(...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,7 +52,8 @@ class Cdp {
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.id && cdp.waiting.has(msg.id)) {
-        const { resolve, reject } = cdp.waiting.get(msg.id);
+        const { resolve, reject, timer } = cdp.waiting.get(msg.id);
+        clearTimeout(timer);
         cdp.waiting.delete(msg.id);
         if (msg.error) reject(new Error(JSON.stringify(msg.error)));
         else resolve(msg.result);
@@ -61,11 +66,11 @@ class Cdp {
   send(method, params = {}) {
     const id = ++this.id;
     return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
-      this.ws.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.waiting.has(id)) { this.waiting.delete(id); reject(new Error(method + " timed out")); }
       }, 20000);
+      this.waiting.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ id, method, params }));
     });
   }
   async evaluate(expression) {
@@ -75,7 +80,11 @@ class Cdp {
     if (r.exceptionDetails) throw new Error(JSON.stringify(r.exceptionDetails));
     return r.result.value;
   }
-  close() { try { this.ws.close(); } catch (_e) {} }
+  close() {
+    for (const pending of this.waiting.values()) { clearTimeout(pending.timer); pending.reject(new Error("CDP connection closed")); }
+    this.waiting.clear();
+    try { this.ws.close(); } catch (_e) {}
+  }
 }
 
 async function waitForDevtools() {
@@ -122,6 +131,10 @@ const CONTROLLED_HTML = `<!doctype html>
     background: #11151c; }
   .bpx-player-control-wrap { position: absolute; left: 0; right: 0; bottom: 0;
     height: 48px; background: rgba(0, 0, 0, 0.45); }
+  .bpx-player-control-bottom-right { display: flex; align-items: center;
+    justify-content: flex-end; height: 48px; padding: 0 12px; }
+  .bpx-player-ctrl-btn { color: white; background: transparent; border: 0;
+    min-width: 40px; height: 32px; }
 </style>
 </head>
 <body>
@@ -131,7 +144,12 @@ const CONTROLLED_HTML = `<!doctype html>
   </div>
   <div class="bpx-player-subtitle-wrap"></div>
   <div class="bpx-player-control-wrap">
-    <button class="bpx-player-ctrl-btn" aria-label="字幕"></button>
+    <div class="bpx-player-control-bottom-right">
+      <button class="bpx-player-ctrl-btn" aria-label="倍速">1.25x</button>
+      <button class="bpx-player-ctrl-btn" aria-label="字幕">字幕</button>
+      <button class="bpx-player-ctrl-btn" aria-label="设置">设置</button>
+      <button class="bpx-player-ctrl-btn" aria-label="全屏">全屏</button>
+    </div>
   </div>
 </div>
 <script>
@@ -237,13 +255,19 @@ const SRT_TEXT = [
 ].join("\n");
 
 async function main() {
-  const report = { steps: [], controlled: null, real: null, errors: [] };
+  const report = { steps: [], controlled: null, real: null, errors: [], audioOutput: AUDIBLE_TEST ? "audible" : "muted" };
   const WAV = makeWav(20);
-  fs.rmSync(PROFILE, { recursive: true, force: true });
+  let occupied = false;
+  try { await fetch(`http://127.0.0.1:${PORT}/json/version`); occupied = true; } catch (_e) {}
+  if (occupied) throw new Error("The debugging port is already in use; choose another YTDS_CDP_PORT.");
+  if (fs.existsSync(PROFILE) && fs.readdirSync(PROFILE).length) {
+    throw new Error("Use a new or empty isolated YTDS_PROFILE directory.");
+  }
   fs.mkdirSync(PROFILE, { recursive: true });
 
   const child = spawn(EDGE, [
     "--headless=new",
+    ...(!AUDIBLE_TEST ? ["--mute-audio"] : []),
     "--remote-debugging-port=" + PORT,
     "--user-data-dir=" + PROFILE,
     "--disable-extensions-except=" + EXT,
@@ -257,8 +281,10 @@ async function main() {
   ], { stdio: "ignore", detached: false });
 
   let ok = false;
+  let browserConnection = null;
   try {
     const version = await waitForDevtools();
+    browserConnection = await Cdp.attach(version.webSocketDebuggerUrl);
     report.browser = version.Browser;
     report.steps.push("isolated browser started on port " + PORT);
 
@@ -266,10 +292,25 @@ async function main() {
     await sleep(2500);
     const list = await targets();
     report.targets = list.map((t) => t.type + " " + (t.title || t.url).slice(0, 90));
-    const sw = list.find((t) => t.url && t.url.startsWith("chrome-extension://"));
+    let sw = null;
+    let worker = null;
+    for (const target of list.filter((t) => t.type === "service_worker" &&
+        t.url.startsWith("chrome-extension://") && t.url.endsWith("/background.js"))) {
+      const candidate = await Cdp.attach(target.webSocketDebuggerUrl);
+      const ours = await candidate.evaluate(`chrome.runtime.getManifest().content_scripts?.some(
+        s => s.matches.includes('https://www.bilibili.com/video/*'))`);
+      if (ours) { sw = target; worker = candidate; break; }
+      candidate.close();
+    }
     report.extensionLoaded = !!sw;
     report.steps.push(sw ? "extension loaded: " + sw.url.slice(0, 60)
                          : "NO extension target found");
+    if (CHECK_CONTROLS) {
+      if (!worker) throw new Error("The YT Dual Subs service worker was not found.");
+      await worker.evaluate(`chrome.storage.sync.set({enabled:true, targetLang:'zh-CN',
+        order:'orig-top', bbEnabled:true, bbTargetLang:'zh-CN', bbOrder:'orig-top'})`);
+      report.steps.push("seeded the old Chinese-to-Chinese settings");
+    }
 
     // ---- 1. the real Bilibili video page ---------------------------------
     const page = (await targets()).find((t) => t.type === "page");
@@ -343,6 +384,11 @@ async function main() {
     report.realSeek = await cdp.evaluate(SEEK);
     await sleep(2000);
     report.real = await cdp.evaluate(probe);
+    report.realControls = await cdp.evaluate(`({
+      group: !!document.querySelector('.bpx-player-control-bottom-right'),
+      parent: document.querySelector('.ytds-toggle')?.parentElement.className,
+      buttons: document.querySelectorAll('.ytds-toggle').length
+    })`);
     report.steps.push("real Bilibili page probed");
 
     // ---- 2. the controlled page ------------------------------------------
@@ -380,10 +426,19 @@ async function main() {
           const u = request.url;
           try {
             if (u.includes(".wav")) {
+              const range = Object.entries(request.headers || []).find(([name]) => name.toLowerCase() === 'range')?.[1];
+              const requested = /^bytes=(\d+)-(\d*)$/.exec(String(range || ''));
+              const first = requested ? Number(requested[1]) : 0;
+              const last = requested && requested[2] ? Math.min(Number(requested[2]), WAV.length - 1) : WAV.length - 1;
+              const body = WAV.subarray(first, last + 1);
+              const headers = [{ name: 'Content-Type', value: 'audio/wav' },
+                { name: 'Accept-Ranges', value: 'bytes' },
+                { name: 'Content-Length', value: String(body.length) }];
+              if (requested) headers.push({ name: 'Content-Range', value: `bytes ${first}-${last}/${WAV.length}` });
               await ctl.send("Fetch.fulfillRequest", {
-                requestId, responseCode: 200,
-                responseHeaders: [{ name: "Content-Type", value: "audio/wav" }],
-                body: WAV.toString("base64")
+                requestId, responseCode: requested ? 206 : 200,
+                responseHeaders: headers,
+                body: body.toString("base64")
               });
             } else if (u.includes("/x/player/")) {
               await ctl.send("Fetch.fulfillRequest", {
@@ -424,9 +479,28 @@ async function main() {
       .map((e) => String(e.params.exceptionDetails.exception?.description
         || e.params.exceptionDetails.text).slice(0, 200));
     report.controlledSeek = await ctl.evaluate(SEEK);
+    if (CHECK_CONTROLS) await ctl.evaluate(`document.querySelector('video').pause()`);
     await sleep(2000);
     report.controlledDuringCue = await ctl.evaluate(probe);
     report.controlled = report.controlledDuringCue;
+
+    if (CHECK_CONTROLS) {
+      // The live page may have staged a previous toggle while the extension
+      // worker was starting. Read the migration result first, then explicitly
+      // enable this Bilibili tab for the interaction assertions below.
+      report.controlsBeforeEnable = await worker.evaluate(`new Promise(resolve =>
+        YtdsSettings.get({bbEnabled:true,bbTargetLang:'zh-CN',bbOrder:'orig-top'}, resolve))`);
+      await worker.evaluate(`Promise.all([
+        chrome.storage.local.set({settingsPendingV1:{values:{bbEnabled:true},nextSyncAt:0}}),
+        chrome.storage.sync.set({bbEnabled:true})
+      ])`);
+      await ctl.send("Page.reload");
+      await sleep(4500);
+      await ctl.evaluate(`(() => { const v = document.querySelector('video');
+        if (!v) return; v.currentTime = 0.4; v.dispatchEvent(new Event('seeked', {bubbles:true}));
+        const p = v.play(); if (p && p.catch) p.catch(() => {}); })()`);
+      await sleep(1800);
+    }
 
     // A screenshot of the controlled page, with the overlay mid-sentence. Only
     // written when YTDS_SHOT points somewhere, so a plain run leaves no files.
@@ -439,16 +513,87 @@ async function main() {
         report.errors.push("screenshot -> " + err.message);
       }
     }
+
+    if (CHECK_CONTROLS) {
+      const verify = (condition, message) => { if (!condition) throw new Error(message); };
+      const snapshot = () => ctl.evaluate(`(() => {
+        const b = document.querySelector('.ytds-toggle');
+        const o = document.querySelector('#ytds-overlay .ytds-orig');
+        const t = document.querySelector('#ytds-overlay .ytds-trans');
+        return {on:document.documentElement.classList.contains('ytds-active'),
+          pressed:b?.getAttribute('aria-pressed'), parent:b?.parentElement.className,
+          buttons:document.querySelectorAll('.ytds-toggle').length,
+          original:o?.textContent || '', translation:t?.textContent || '',
+          germanAbove:!!o && !!t && t.getBoundingClientRect().top < o.getBoundingClientRect().top};
+      })()`);
+      const savedSettings = () => worker.evaluate(`new Promise(resolve => YtdsSettings.get({
+        enabled:true,targetLang:'zh-CN',order:'orig-top',bbEnabled:true,bbTargetLang:'zh-CN',bbOrder:'orig-top'},resolve))`);
+      report.controlsInitial = await snapshot();
+      verify(report.controlsInitial.parent === 'bpx-player-control-bottom-right', 'toggle is not inside bottom controls');
+      verify(report.controlsInitial.germanAbove, 'German translation is not above the original');
+      verify(/[A-Za-z]/.test(report.controlsInitial.translation) && !/[\u4e00-\u9fff]/.test(report.controlsInitial.translation),
+        'the translation line is still Chinese');
+      verify(/[\u4e00-\u9fff]/.test(report.controlsInitial.original), 'the original is not Chinese');
+      report.controlsRepaired = await savedSettings();
+      verify(report.controlsRepaired.bbTargetLang === 'de' && report.controlsRepaired.bbOrder === 'trans-top',
+        'the stored Bilibili layout was not repaired');
+      await ctl.evaluate(`document.querySelector('.ytds-toggle').click()`);
+      await sleep(600);
+      report.controlsOff = await snapshot();
+      report.controlsStoredOff = await savedSettings();
+      verify(!report.controlsOff.on && report.controlsOff.pressed === 'false', 'player toggle did not turn subtitles off');
+      verify(report.controlsStoredOff.bbEnabled === false && report.controlsStoredOff.enabled === true,
+        'turning Bilibili off changed YouTube');
+      verify(report.controlsStoredOff.targetLang === 'zh-CN' && report.controlsStoredOff.order === 'orig-top',
+        'the repair changed YouTube language or order');
+
+      // The popup's Bilibili switch is covered by popup source/unit checks.
+      // A headless Target created here does not model the browser popup's
+      // active-tab context, so an end-to-end popup assertion would be a false
+      // negative even though the real popup uses the content-script status.
+      report.popupE2e = 'covered by popup source/unit checks; skipped in headless target';
+      await ctl.send('Page.reload');
+      await sleep(3000);
+      report.controlsReloadOff = await snapshot();
+      verify(!report.controlsReloadOff.on && report.controlsReloadOff.buttons === 1,
+        'off state or the button was lost after reload');
+      // The button is a native type=button and remains keyboard-focusable. A
+      // headless CDP key event does not synthesize the browser's default button
+      // activation consistently, so Enter is recorded as an environment-limited
+      // check rather than treated as a product failure.
+      report.controlsKeyboard = 'not asserted: headless CDP does not synthesize native button activation';
+      await ctl.evaluate(`(() => {
+        const old = document.querySelector('.bpx-player-control-bottom-right');
+        const next = old.cloneNode(true); next.querySelector('.ytds-toggle')?.remove(); old.replaceWith(next);
+      })()`);
+      await sleep(500);
+      report.controlsRebuilt = await snapshot();
+      verify(report.controlsRebuilt.buttons === 1 && report.controlsRebuilt.parent === 'bpx-player-control-bottom-right',
+        'the toggle did not survive control-group replacement');
+      report.steps.push('passed German/Chinese layout, independent enable state, player toggle, reload and control rebuild');
+      worker.close(); ctl.close(); cdp.close();
+      ok = true;
+      return;
+    }
     // ---- 2b. pause, playback rate and seek --------------------------------
     // The overlay must follow the video's own clock through a rate change, a
     // seek into another sentence, a pause, and a seek back.
-    const SEEK_TO = (t) => `(() => {
+    const SEEK_TO = (t) => `(async () => {
       const v = document.querySelector('video');
       if (!v) return 'no video element';
+      v.pause();
+      const settled = new Promise((resolve, reject) => {
+        const deadline = setTimeout(() => {
+          v.removeEventListener('seeked', done); reject(new Error('seek timed out'));
+        }, 3000);
+        function done() { clearTimeout(deadline); resolve(); }
+        v.addEventListener('seeked', done, {once: true});
+      });
       v.currentTime = ${t};
-      v.dispatchEvent(new Event('seeking', { bubbles: true }));
-      v.dispatchEvent(new Event('seeked', { bubbles: true }));
-      const p = v.play(); if (p && p.catch) p.catch(function () {});
+      await settled;
+      if (Math.abs(v.currentTime - ${t}) > 0.1) throw new Error('media seek failed: ' +
+        JSON.stringify({time: v.currentTime, duration: v.duration, ready: v.readyState,
+          seekable: Array.from({length: v.seekable.length}, (_, i) => [v.seekable.start(i), v.seekable.end(i)])}));
       return 'currentTime=' + v.currentTime;
     })()`;
 
@@ -465,6 +610,11 @@ async function main() {
     report.backSeekCall = await ctl.evaluate(SEEK_TO(0.6));
     await sleep(1800);
     report.afterBackSeek = await ctl.evaluate(probe);
+    if (!report.afterRateSeek.orig.join('').includes('第一步') ||
+        !report.afterBackSeek.orig.join('').includes('今天我们') ||
+        Math.abs(report.afterPause.time - report.afterRateSeek.time) > 0.1) {
+      throw new Error('paused seek or pause did not preserve the expected subtitle/timeline');
+    }
     await ctl.evaluate(`(() => { const v = document.querySelector('video');
       v.playbackRate = 1; v.dispatchEvent(new Event('ratechange', { bubbles: true })); })()`);
     report.steps.push("pause, playback rate and seek probed");
@@ -523,7 +673,15 @@ async function main() {
         return 'was not in fullscreen'; })()`);
       await sleep(1200);
       report.afterFullscreen = await ctl.evaluate(FS_PROBE);
-      report.steps.push("fullscreen entered and exited");
+      if (report.fullscreen.fullscreenElement) {
+        if (!report.fullscreen.inside || report.afterFullscreen.fullscreenElement) {
+          throw new Error('fullscreen overlay containment or exit failed');
+        }
+        report.steps.push("fullscreen entered and exited");
+      } else {
+        report.limitations = [...(report.limitations || []),
+          "headless browser did not enter fullscreen; viewport resize is checked separately"];
+      }
     } catch (err) {
       report.errors.push("fullscreen -> " + err.message);
     }
@@ -668,7 +826,16 @@ async function main() {
             htmlClass: document.documentElement.className
           };
         })()`);
-        report.steps.push("YouTube regression probed");
+        if (!report.youtube.player) {
+          report.limitations = [...(report.limitations || []),
+            "real YouTube page did not expose a player; YouTube browser regression remains unverified"];
+          report.steps.push("YouTube page unavailable for regression");
+        } else {
+          if (!report.youtube.overlay || !report.youtube.toggleInRightControls || report.youtube.toggleIsBili) {
+            throw new Error('YouTube overlay or control attachment failed');
+          }
+          report.steps.push("YouTube overlay and controls verified");
+        }
       } catch (err) {
         report.errors.push("youtube -> " + err.message);
       }
@@ -677,10 +844,18 @@ async function main() {
     report.steps.push("controlled page probed");
     ctl.close();
     cdp.close();
-    ok = true;
+    if (!report.extensionLoaded || !report.controlled.overlay ||
+        !report.controlled.orig.join('') || !report.controlled.trans.join('') || !report.grown.inside) {
+      throw new Error('extension loading, bilingual captions or viewport containment failed');
+    }
+    ok = report.errors.length === 0;
   } catch (err) {
     report.errors.push(String(err && err.stack || err));
   } finally {
+    if (browserConnection) {
+      try { await browserConnection.send('Browser.close'); } catch (_e) {}
+      browserConnection.close();
+    }
     try { child.kill(); } catch (_e) {}
     await sleep(800);
     fs.writeFileSync(REPORT, JSON.stringify(report, null, 2));
@@ -689,4 +864,5 @@ async function main() {
   process.exit(ok ? 0 : 1);
 }
 
-main();
+export { Cdp };
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();

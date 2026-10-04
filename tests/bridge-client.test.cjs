@@ -25,6 +25,23 @@ const vm = require('node:vm');
 const ROOT = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(ROOT, 'bridge-client.js'), 'utf8');
 
+test('recognized source word times are validated and cleared on text-only revisions', () => {
+  const bridge = load();
+  const words = [{ text: 'Hallo', startMs: 1200, endMs: 2000, probability: 0.9 },
+    { text: 'Welt', startMs: 2200, endMs: 3000, probability: 0.9 }];
+  const cue = bridge.cueFromSegment(segment({ original: 'Hallo Welt', sourceLanguage: 'de', words }));
+  assert.equal(cue.wordTimingSource, 'recognition');
+  assert.equal(cue.words.length, 2);
+  assert.equal(cue.words[0].t, 1200);
+  assert.equal(cue.transWords, undefined);
+  for (const bad of [NaN, 0.1, 1.1]) {
+    assert.equal(bridge.cueFromSegment(segment({ words: [{ ...words[0], probability: bad }] })).words.length, 0);
+  }
+  assert.equal(bridge.cueFromSegment(segment({ words, provisional: true })).words.length, 0);
+  const merged = bridge.mergeSegments([cue], [segment({ original: 'Hallo Welt!', sourceLanguage: 'de', revision: 2 })]);
+  assert.equal(merged.cues[0].words.length, 0);
+});
+
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
 function load() {
@@ -202,6 +219,7 @@ test('the session request states the page verdict and the video timeline', () =>
   assert.equal(body.timelineEpoch, 3);
   assert.equal(body.audioStartMs, 61500);
   assert.equal(body.hasAudioTrack, true);
+  assert.equal(body.translationTarget, 'de');
   // The part number is part of the identity, so two parts never share captions.
   assert.equal(body.videoKey, 'BV1xx411c7mD#p2');
 });
@@ -248,6 +266,24 @@ test('health and session calls carry the bearer token, and the mask never leaks 
   assert.equal(calls[0].headers.Authorization, 'Bearer ' + token);
   assert.equal(bridge.maskToken(token), 's3c************lue');
   assert.ok(!bridge.maskToken(token).includes('cret'));
+});
+
+test('the recognizer client refuses remote bridge addresses before sending a bearer token', () => {
+  const bridge = load();
+  assert.throws(() => bridge.createClient({ fetch() {}, base: 'https://example.com:8766', token: 'secret' }),
+    /loopback HTTP URL/);
+  assert.throws(() => bridge.createClient({ fetch() {}, base: 'http://127.0.0.1:8766/path', token: 'secret' }),
+    /loopback HTTP URL/);
+  assert.doesNotThrow(() => bridge.createClient({ fetch() {}, base: 'http://127.0.0.1:8766', token: 'secret' }));
+});
+
+test('an oversized bridge response is rejected before JSON parsing', async () => {
+  const bridge = load();
+  const client = bridge.createClient({
+    base: 'http://127.0.0.1:8766', token: 'secret',
+    fetch: () => Promise.resolve({ ok: true, text: async () => 'x'.repeat(4 * 1024 * 1024 + 1) })
+  });
+  await assert.rejects(client.health(), /response exceeded the size limit/);
 });
 
 test('an offline bridge becomes a clear error instead of a hang', async () => {
@@ -339,10 +375,38 @@ test('a revision without a translation keeps the translation already shown', () 
   assert.equal(merged.cues[0].trans, 'Übersetzung');
 });
 
+test('a corrected original discards its old translation until the new one arrives', () => {
+  const bridge = load();
+  const first = bridge.mergeSegments([], [segment({ revision: 1 })]);
+  const corrected = bridge.mergeSegments(first.cues, [segment({ revision: 2,
+    original: '明天天气很差。', german: '' })]);
+  assert.equal(corrected.cues[0].trans, undefined);
+  assert.equal(corrected.cues[0].text, '明天天气很差。');
+  const translated = bridge.mergeSegments(corrected.cues, [segment({ revision: 3,
+    original: '明天天气很差。', german: 'Morgen wird das Wetter schlecht.' })]);
+  assert.equal(translated.cues[0].trans, 'Morgen wird das Wetter schlecht.');
+});
+
+test('segment ids may recur in another epoch without overwriting its sentences', () => {
+  const bridge = load();
+  const merged = bridge.mergeSegments([], [segment({ timelineEpoch: 0, revision: 4 }),
+    segment({ timelineEpoch: 1, revision: 1, original: '另一段话。' })]);
+  assert.equal(merged.cues.length, 2);
+});
+
+test('invalid recognition coordinates are rejected instead of painting at time zero', () => {
+  const bridge = load();
+  for (const patch of [{ startMs: NaN }, { endMs: Infinity }, { startMs: '1200' },
+    { startMs: -1 }, { endMs: 1200 }, { endMs: 86400001 },
+    { timelineEpoch: -1 }, { revision: 1.2 }, { original: '', german: 'translation only' }]) {
+    assert.equal(bridge.cueFromSegment(segment(patch)), null);
+  }
+});
+
 test('cues stay in video order and a translation is still pending while it can arrive', () => {
   const bridge = load();
   const merged = bridge.mergeSegments([], [
-    segment({ segmentId: 'b', startMs: 5000, german: '', provisional: true }),
+    segment({ segmentId: 'b', startMs: 5000, endMs: 6000, german: '', provisional: true }),
     segment({ segmentId: 'a', startMs: 1000, german: 'Erste' }),
   ]);
   assert.deepEqual(Array.from(merged.cues, (c) => String(c.id)), ['a', 'b']);
@@ -352,13 +416,33 @@ test('cues stay in video order and a translation is still pending while it can a
   assert.equal(bridge.pendingTranslation(merged.cues), true);
   assert.equal(bridge.pendingTranslation([bridge.cueFromSegment(segment({ german: 'Ja' }))]), false);
   assert.equal(
-    bridge.pendingTranslation([bridge.cueFromSegment(segment({ german: '', provisional: false }))]),
+    bridge.pendingTranslation([bridge.cueFromSegment(segment({ german: '', provisional: false, translationFailed: true }))]),
     false
   );
   assert.equal(
     bridge.pendingTranslation([bridge.cueFromSegment(segment({ german: '', provisional: true }))]),
     true
   );
+});
+
+test('a published original keeps polling until translation succeeds or explicitly fails', () => {
+  const bridge = load();
+  const source = bridge.cueFromSegment(segment({ german: '', provisional: false, translationFailed: false }));
+  assert.equal(source.translationFailed, false);
+  assert.equal(bridge.pendingTranslation([source]), true);
+  const revised = bridge.mergeSegments([source], [segment({ german: 'Hallo', revision: 2 })]);
+  assert.equal(bridge.pendingTranslation(revised.cues), false);
+});
+
+test('review labels preserve raw text and do not expose a fake accuracy percentage', () => {
+  const cue = load().cueFromSegment(segment({ rawOriginal: '原始字形', uncertain: true,
+    uncertaintyReasons: ['low_log_probability', 'scores_unavailable', 'injected'], avgLogprob: -1.4,
+    translationGroupIds: ['a', 'b'] }));
+  assert.equal(cue.rawOriginal, '原始字形');
+  assert.equal(cue.uncertain, true);
+  assert.deepEqual(Array.from(cue.uncertaintyReasons), ['low_log_probability', 'scores_unavailable']);
+  assert.equal(cue.accuracy, undefined);
+  assert.equal(cue.translationGroupIds.length, 2);
 });
 
 // ---------------------------------------------------------------------- SRT
@@ -496,4 +580,50 @@ test('a poll that only revises a sentence reports it as an update, not a new lin
   assert.ok(updates.length >= 2);
   assert.equal(updates[updates.length - 1].updated >= 1, true);
   assert.equal(updates[updates.length - 1].added, 0);
+});
+
+test('tombstones prevent late resurrection and a newer replacement appears once', () => {
+  const bridge = load();
+  const cue = bridge.cueFromSegment(segment());
+  const removed = { segmentId: cue.id, timelineEpoch: cue.epoch, revision: 3, removed: true };
+  const first = bridge.mergeSegments([cue], [removed]);
+  assert.equal(first.cues.length, 0);
+  const stale = bridge.mergeSegments(first.cues, [segment({ revision: 2 })]);
+  assert.equal(stale.cues.length, 0);
+  const fresh = bridge.mergeSegments(stale.cues, [segment({ revision: 4 })]);
+  assert.equal(fresh.cues.length, 1);
+  assert.equal(bridge.mergeSegments([cue], [removed, segment({ revision: 4 })]).cues.length, 1);
+});
+
+test('empty and stale recognition polls retain list identity and removal history', () => {
+  const bridge = load();
+  const list = Array.from({ length: 5000 }, (_, i) =>
+    bridge.cueFromSegment(segment({ segmentId: 's' + i, startMs: i * 4000, endMs: i * 4000 + 2000 })));
+  assert.strictEqual(bridge.mergeSegments(list, []).cues, list);
+  assert.strictEqual(bridge.mergeSegments(list, [segment({ segmentId: 's0' })]).cues, list);
+  const removal = { segmentId: 'gone', timelineEpoch: 0, revision: 3, removed: true };
+  assert.strictEqual(bridge.mergeSegments(list, [removal]).cues, list);
+  const empty = bridge.mergeSegments(list, []).cues;
+  assert.strictEqual(bridge.mergeSegments(empty, [segment({ segmentId: 'gone', revision: 2 })]).cues, list);
+});
+
+test('file recognition keeps removed sentences removed through later stale polls', async () => {
+  const bridge = load();
+  let polls = 0;
+  const { fetchImpl } = fakeFetch({
+    '/v1/session POST': { body: sessionPayload() },
+    default: { body: { ok: true } },
+    '/v1/session/abcdef1234567890/transcript POST': () => {
+      polls++;
+      const segments = polls === 1 ? [segment()] : polls === 2
+        ? [{ segmentId: segment().segmentId, timelineEpoch: 0, revision: 3, removed: true }]
+        : polls === 3 ? [] : [segment({ revision: 2 })];
+      return { body: transcriptPayload(segments, { revision: polls, status: polls < 4 ? 'recognizing' : 'ready' }) };
+    }
+  });
+  const result = await bridge.recognize({ fetch: fetchImpl, base: 'http://127.0.0.1:8766',
+    platform: 'youtube', videoKey: 'abc', captionAvailability: 'absent',
+    audio: { bytes: new Uint8Array(32000), sampleRate: 16000, channels: 1 } });
+  assert.equal(result.cues.length, 0);
+  assert.equal(polls, 4);
 });

@@ -6,6 +6,20 @@ const assert = require('node:assert/strict');
 
 const { mountContent } = require('./harness.cjs');
 
+test('long timed sentences follow forward and backward seeks without losing punctuation or pause gaps', async () => {
+  const text = Array.from({ length: 90 }, (_, i) => 'Wort' + i).join(' ') + '.';
+  const words = text.split(' ').map((u, i) => ({ u, t: i * 250, e: i * 250 + 200 }));
+  const player = await mountContent({ cues: [{ start: 0, dur: 23000, text, words,
+    wordTimingSource: 'recognition' }] });
+  for (const i of [0, 45, 89, 3, 78, 12]) {
+    player.seekTo((i * 250 + 50) / 1000);
+    assert.equal(player.activeWordIdx(), i);
+    assert.equal(player.read().original, text);
+    player.seekTo((i * 250 + 220) / 1000);
+    assert.equal(player.activeWordIdx(), -1, 'a real pause has no highlighted word');
+  }
+});
+
 test('unspaced Japanese and Thai fragments join without inserted spaces', async () => {
   const japanese = await mountContent({ sourceLang: 'ja', cues: [
     { start: 0, dur: 500, text: 'こんに' },
@@ -142,6 +156,22 @@ test('a word-timed track is merged into whole sentences', async () => {
   assert.equal(player.activeWordIdx(), 1, 'the second word lights up when spoken');
 });
 
+test('a very short word does not flash as a one-word subtitle', async () => {
+  const player = await mountContent({ cues: [{
+    start: 0, dur: 1800, text: 'Das ist gut.',
+    words: [
+      { t: 0, e: 700, u: 'Das' },
+      { t: 700, e: 770, u: ' ist' },
+      { t: 770, e: 1400, u: ' gut.' }
+    ], wordTimingSource: 'audio'
+  }], aligned: true });
+  player.at(0.72);
+  assert.equal(player.read().original, 'Das ist gut.', 'the sentence remains visible');
+  assert.equal(player.activeWordIdx(), -1, 'a 70ms word is left unboxed');
+  player.at(0.9);
+  assert.equal(player.activeWordIdx(), 2, 'the next stable word resumes highlighting');
+});
+
 test('without word times a long pause still splits the sentence', async () => {
   const plain = [
     { start: 0, dur: 1000, text: 'Hallo' },
@@ -174,6 +204,42 @@ test('repeat stays out of the way when it is off', async () => {
   player.at(1.5);
   assert.equal(player.video.playbackRate, 1, 'untouched');
   assert.equal(player.video.currentTime, 1.5);
+});
+
+test('sentence auto-pause uses the spoken end and lets the user continue', async () => {
+  const p = await mountContent({ cues: TWO, aligned: true, settings: { autoPause: true, offsetMs: 500 } });
+  let pauses = 0;
+  p.video.pause = () => { pauses++; p.video.paused = true; };
+  p.at(0.1);
+  p.at(0.7);
+  assert.equal(pauses, 0, 'display offset must not pause the audio early');
+  p.at(1.01);
+  assert.equal(pauses, 1);
+  p.video.paused = false;
+  p.at(1.02);
+  p.at(1.5);
+  assert.equal(pauses, 1, 'resuming advances to the next sentence');
+  p.at(2.01);
+  assert.equal(pauses, 2);
+});
+
+test('repeat uses raw media time even when subtitle display is offset', async () => {
+  const p = await mountContent({ cues: TWO, aligned: true, settings: { repeatCount: 2, offsetMs: 500 } });
+  p.at(0.1);
+  p.at(0.7);
+  assert.equal(p.video.currentTime, 0.7);
+  p.at(1.1);
+  assert.equal(p.video.currentTime, 0);
+});
+
+test('auto-pause still operates when the user reads a separate learning tab', async () => {
+  const p = await mountContent({ cues: TWO, aligned: true, settings: { autoPause: true } });
+  let paused = false;
+  p.video.pause = () => { paused = true; p.video.paused = true; };
+  p.at(0.1);
+  p.setHidden(true);
+  p.at(1.1);
+  assert.equal(paused, true);
 });
 
 test('the shortcut repeats the sentence on screen, even with the setting off', async () => {

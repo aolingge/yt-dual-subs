@@ -29,8 +29,6 @@
 (function () {
   "use strict";
 
-  const CONTENT_STATE = new Map();   // videoKey -> last context the page reported
-
   let ctx = null;
   let stream = null;
   let source = null;
@@ -40,6 +38,10 @@
   let session = null;
   let status = { state: "", message: "", videoKey: "", cueCount: 0 };
   let lastReport = null;
+  let health = null;
+  let healthTimer = null;
+  let inputState = "";
+  let trackHandlers = [];
 
   // The two objects a test needs to reach: the session (what the transcript is
   // made of) and the worklet node (where the audio comes in). Exposed for the
@@ -59,11 +61,38 @@
   }
 
   function report(state, extra) {
-    status = Object.assign({}, status, extra || {}, { state });
+    status = Object.assign({}, status, extra || {}, { state, audioInput: inputSnapshot() });
     send(Object.assign({ type: "recogState", state }, status));
   }
 
+  function inputSnapshot() {
+    return health ? health.snapshot({ nowMs: Date.now(), contextState: ctx?.state,
+      mediaFresh: !!clock?.ready && Date.now() - clock.atMs <= 2500 }) : { state: "idle" };
+  }
+
+  function updateInputState() {
+    const next = inputSnapshot().state;
+    if (next !== inputState) {
+      inputState = next;
+      report(status.state);
+    }
+  }
+
+  function captureEnded(activeSession) {
+    if (session !== activeSession) return;
+    session = null;
+    teardown();
+    report("failed", { message: "capture_ended" });
+    // Keep captions already shown; discard late callbacks from this session.
+    activeSession.finish().catch(() => {});
+  }
+
   function teardown() {
+    if (healthTimer !== null) { clearInterval(healthTimer); healthTimer = null; }
+    for (const [track, handler] of trackHandlers) track.removeEventListener?.("ended", handler);
+    trackHandlers = [];
+    health = null;
+    inputState = "";
     if (node) {
       try { node.port.postMessage({ type: "stop" }); } catch (_e) { /* already gone */ }
       try { node.disconnect(); } catch (_e) { /* already gone */ }
@@ -94,6 +123,8 @@
   async function start(message) {
     if (session) return { ok: true, alreadyRunning: true };
     const info = message.context || {};
+    status = { state: "starting", message: "", videoKey: info.videoKey || "", cueCount: 0,
+      tabId: Number.isInteger(info.tabId) ? info.tabId : null, metrics: {}, warning: "" };
     if (info.captionAvailability !== "absent") {
       // Belt and braces: the popup gates the button, and the content script
       // gates the batch, but capture must not begin on a video that has
@@ -132,17 +163,32 @@
     gain.connect(ctx.destination);
 
     clock = new globalThis.YtdsMediaClock.MediaClock({});
-    if (lastReport) clock.observe(lastReport);
+    // Seed from the page context rechecked immediately before capture. A
+    // recorder can open before its first periodic media report arrives.
+    if (Number.isFinite(info.currentTimeMs) && info.currentTimeMs >= 0) {
+      clock.observe({ mediaMs: info.currentTimeMs, wallMs: Date.now(),
+        rate: info.playbackRate, paused: info.paused });
+    } else if (lastReport && lastReport.videoId === info.videoKey) {
+      clock.observe(lastReport);
+    }
+    if (!clock.ready) {
+      teardown();
+      report("failed", { message: "media_not_ready" });
+      return { ok: false, reason: "media_not_ready" };
+    }
     // One packet per second of audio at the context's rate. The bridge's own
     // packet cap is what limits a request, not this.
     const framesPerPacket = Math.max(1600, Math.round(ctx.sampleRate));
-    session = new globalThis.YtdsRecognizerStream.RecognizerSession({
+    health = new globalThis.YtdsCaptureHealth.CaptureHealth();
+    health.playback({ paused: clock.paused, epoch: clock.epoch, atMs: Date.now() });
+    const activeSession = new globalThis.YtdsRecognizerStream.RecognizerSession({
       bridge: globalThis.YtdsBridge.createClient({ base: info.bridgeBase, token: info.bridgeToken }),
       clock,
       platform: info.platform || "",
       videoKey: info.videoKey || "",
       captionAvailability: info.captionAvailability || "unknown",
       sourceLanguage: info.sourceLanguage || "zh",
+      translationTarget: info.bridgeTranslationTarget || "de",
       title: info.title || "",
       url: info.url || "",
       durationMs: info.durationMs,
@@ -151,6 +197,7 @@
       channels: 1,
       framesPerPacket,
       onUpdate: (payload) => {
+        if (session !== activeSession) return;
         send({
           type: "recognizedCues",
           videoKey: info.videoKey || "",
@@ -163,25 +210,33 @@
         });
       },
       onState: (payload) => {
+        if (session !== activeSession) return;
         report(payload.state, {
           message: payload.message || "",
           videoKey: info.videoKey || "",
           cueCount: payload.cueCount || 0,
           dropped: payload.dropped || 0,
+          metrics: payload.metrics || {},
+          warning: payload.warning || "",
         });
       },
     });
+    session = activeSession;
 
-    node = new AudioWorkletNode(ctx, "pcm-chunker", {
+    const activeNode = new AudioWorkletNode(ctx, "pcm-chunker", {
       numberOfInputs: 1,
       numberOfOutputs: 1,
       channelCount: 2,
       channelCountMode: "max",
       processorOptions: { flushMs: 100, language: info.sourceLanguage || "zh" },
     });
+    node = activeNode;
     node.port.onmessage = (event) => {
       const data = event && event.data;
-      if (!data || data.type !== "pcm" || !session) return;
+      if (!data || data.type !== "pcm" || !data.samples?.length ||
+          session !== activeSession || node !== activeNode) return;
+      health.observe(data.samples, Date.now());
+      updateInputState();
       const bytes = globalThis.YtdsBridge.floatsToPcm16(data.samples);
       session.pushPcm(bytes, { atMs: Date.now() });
     };
@@ -192,15 +247,31 @@
     // The chunker's own output is silence, so this edge carries no audio.
     gain.connect(node);
     node.connect(ctx.destination);
+    for (const track of stream.getTracks()) {
+      if (track.kind !== "audio") continue;
+      const handler = () => captureEnded(activeSession);
+      track.addEventListener?.("ended", handler);
+      trackHandlers.push([track, handler]);
+    }
 
     await ctx.resume();
-    try { await session.start(); } catch (err) {
+    if (session !== activeSession) return { ok: false, reason: "capture_ended" };
+    try {
+      const opened = await session.start();
+      if (!opened?.sessionId || opened.recognize === false) {
+        throw new YtdsBridge.BridgeError(opened?.recognize === false ? "captions_present" : "bad_response");
+      }
+    } catch (err) {
       teardown();
-      report("failed", { message: "bridge_unreachable", videoKey: info.videoKey || "" });
-      return { ok: false, reason: "bridge", message: String((err && err.message) || err) };
+      session = null; // a failed connection must not make the next start "alreadyRunning"
+      const code = (err && err.code) || "bridge_unreachable";
+      report("failed", { message: code, videoKey: info.videoKey || "" });
+      return { ok: false, reason: "bridge", code };
     }
-    CONTENT_STATE.set(info.videoKey || "", info);
+    if (session !== activeSession) return { ok: false, reason: "capture_ended" };
     report("running", { videoKey: info.videoKey || "", message: "" });
+    healthTimer = setInterval(updateInputState, 500);
+    if (healthTimer && typeof healthTimer.unref === "function") healthTimer.unref();
     return { ok: true, sampleRate: ctx.sampleRate };
   }
 
@@ -228,6 +299,8 @@
     };
     if (!Number.isFinite(lastReport.mediaMs) || !Number.isFinite(lastReport.wallMs)) return { ok: false };
     const verdict = session ? session.observe(lastReport) : clock.observe(lastReport);
+    health?.playback({ paused: clock.paused, epoch: clock.epoch, atMs: Date.now() });
+    updateInputState();
     return { ok: true, epoch: verdict ? verdict.epoch : 0, restarted: !!(verdict && verdict.restarted) };
   }
 
@@ -236,17 +309,25 @@
       state: status.state,
       message: status.message,
       videoKey: status.videoKey,
+      tabId: status.tabId ?? null,
       cueCount: session ? session.cues.length : status.cueCount || 0,
       revision: session ? session.revision : 0,
       dropped: session ? session.dropped : 0,
       sampleRate: ctx ? ctx.sampleRate : 0,
       cues: session ? session.cues : [],
       epoch: clock ? clock.epoch : 0,
+      metrics: session ? session.metrics : status.metrics || {},
+      warning: session ? session.warning : status.warning || "",
+      audioInput: inputSnapshot(),
     };
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!message || typeof message.type !== "string") return;
+    if (!["mediaReport", "recogOffscreenStart", "recogOffscreenStop", "recogOffscreenStatus", "recogOffscreenRetry"].includes(message.type)) return;
+    if (sender?.tab || (sender?.url && sender.url !== chrome.runtime.getURL("background.js"))) {
+      sendResponse({ ok: false, reason: "forbidden" }); return;
+    }
     if (message.type === "mediaReport") {
       // The panel's reports arrive on every tick, so the cheapest known-answer
       // check comes first: a report for another target is simply not ours.
@@ -254,9 +335,23 @@
       handleReport(message).then(sendResponse).catch(() => sendResponse({ ok: false }));
       return true;
     }
+    if (message.type === "recogOffscreenRetry") {
+      if (!session?.sessionId || message.timelineEpoch !== session.epoch) {
+        sendResponse({ ok: false, code: "conflict" }); return;
+      }
+      session.queue(() => session.bridge.retrySegment(session.sessionId, message.segmentId, message.timelineEpoch))
+        .then(sendResponse).catch(err => sendResponse({ ok: false, code: err?.code || "failed" }));
+      return true;
+    }
     if (message.type === "recogOffscreenStart") {
-      start(message).then(sendResponse).catch((err) =>
-        sendResponse({ ok: false, reason: "failed", message: String((err && err.message) || err) }));
+      start(message).then(sendResponse).catch(async () => {
+        const previous = session;
+        session = null;
+        teardown();
+        if (previous) { try { await previous.finish(); } catch (_e) {} }
+        report("failed", { message: "audio_context_failed" });
+        sendResponse({ ok: false, reason: "audio_context" });
+      });
       return true;
     }
     if (message.type === "recogOffscreenStop") {

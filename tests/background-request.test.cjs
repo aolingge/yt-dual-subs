@@ -40,8 +40,8 @@ function mountBackground(fetch, { withTimers = false } = {}) {
   }
   vm.runInNewContext(
     fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8'), sandbox);
-  const request = (text) => new Promise((resolve) => {
-    listeners.message({ type: 'translate', text, targetLang: 'zh-CN', sourceLang: 'de' },
+  const request = (text, settings = {}) => new Promise((resolve) => {
+    listeners.message({ type: 'translate', text, targetLang: 'zh-CN', sourceLang: 'de', ...settings },
       {}, resolve);
   });
   return { request, timers };
@@ -136,4 +136,47 @@ test('simultaneous translations of the same sentence share a single network requ
   assert.equal(replies[1].translated, '你好。');
   await p.request('Hallo.');
   assert.equal(count, 1, 'the completed response is cached');
+});
+
+test('all tabs share a bounded translation queue and recover after pressure', async () => {
+  let active = 0, peak = 0;
+  const release = [];
+  const p = mountBackground(() => {
+    active++; peak = Math.max(peak, active);
+    return new Promise(resolve => release.push(() => {
+      active--; resolve({ ok: true, json: async () => [[['译文']]] });
+    }));
+  });
+  const requests = Array.from({ length: 70 }, (_, index) => p.request('sentence ' + index));
+  assert.equal(peak, 4);
+  for (let round = 0; round < 20; round++) {
+    release.splice(0).forEach(resolve => resolve());
+    await tick();
+  }
+  const replies = await Promise.all(requests);
+  assert.equal(replies.filter(reply => reply.ok).length, 68);
+  assert.equal(replies.filter(reply => /queue full/.test(reply.error)).length, 2);
+  assert.equal(peak, 4);
+  assert.equal(active, 0);
+});
+
+test('429 suppresses queued and later requests across different sentences', async () => {
+  let calls = 0;
+  const p = mountBackground(async () => {
+    calls++; return { ok: false, status: 429, headers: { get: () => '120' } };
+  });
+  const replies = await Promise.all(Array.from({ length: 10 }, (_, i) => p.request('sentence ' + i)));
+  assert.ok(replies.every(reply => !reply.ok && /429/.test(reply.error)));
+  assert.equal(calls, 4, 'only requests already in progress reach the server');
+  assert.match((await p.request('another sentence')).error, /429/);
+  assert.equal(calls, 4);
+});
+
+test('invalid inputs, same-language text and malformed responses do not waste requests', async () => {
+  let calls = 0;
+  const p = mountBackground(async () => { calls++; return { ok: true, json: async () => ({ unexpected: true }) }; });
+  for (const text of [null, {}, 'x'.repeat(8193)]) assert.equal((await p.request(text)).ok, false);
+  assert.equal((await p.request('Hallo', { targetLang: 'de' })).translated, 'Hallo');
+  assert.equal(calls, 0);
+  assert.match((await p.request('Hallo')).error, /bad response/);
 });

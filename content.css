@@ -149,16 +149,16 @@ html.ytds-active.ytds-rendering .bpx-player-subtitle-wrap {
 }
 
 /* ---- study mode: karaoke + translation reveal --------------------------- */
-/* Highlight only the current word. An opaque fill and two contrasting rings
-   keep it readable over bright video; opacity never dims the word itself. */
-.ytds-w { transition: background-color 0.08s linear; }
+/* Highlight the current word with a light fill and underline. Opacity changes
+   the fill, never the glyph; keep the complete sentence visually continuous. */
+.ytds-w { transition: color 0.12s linear, background-color 0.12s linear, border-color 0.12s linear; }
 .ytds-w-on {
-  background: var(--ytds-karaoke-bg, rgba(255, 214, 92, 0.95));
-  color: var(--ytds-karaoke-color, #161616);
-  text-shadow: none;
-  border-radius: 3px;
-  box-shadow: 0 0 0 2px var(--ytds-karaoke-border, #ffd65c),
-              0 0 0 3px rgba(0, 0, 0, 0.9);
+  /* A sentence stays visually continuous; the active word gets a quiet cue. */
+  background: color-mix(in srgb, var(--ytds-karaoke-bg, #ffd65c) 32%, transparent);
+  color: var(--ytds-karaoke-color, #fff);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+  border-radius: 2px;
+  box-shadow: inset 0 -0.12em 0 var(--ytds-karaoke-border, #ffd65c);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
@@ -255,34 +255,24 @@ html.ytds-active.ytds-rendering .bpx-player-subtitle-wrap {
 }
 
 /* ---- Bilibili ---------------------------------------------------------- */
-/* The bpx player's control-bar button group is built by a lazily loaded chunk
-   and its class names could not be verified, so the quick toggle is NOT put
-   inside .bpx-player-control-wrap: appending a block child there could change
-   the bar's own layout and disturb the danmaku switch or the progress bar.
-   It is attached to .bpx-player-container instead — verified present and
-   already a positioning context — and placed by CSS in the video's top-right
-   corner, which is empty in the normal and fullscreen layouts. It therefore
-   cannot overlap or steal clicks from any native control.
-   Visibility follows the player's own control state: the container carries
-   data-ctrl-hidden="true" exactly while the controls are auto-hidden. */
+/* Participate in the native bottom-right control row, including its auto-hide
+   and fullscreen layout. A fixed icon width keeps neighbouring controls clear. */
 .bpx-player-container .ytds-toggle-bili {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 76;
-  width: 30px;
-  height: 30px;
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 32px;
+  align-self: center;
+  width: 32px;
+  height: 32px;
+  margin: 0 4px;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  border-radius: 50%;
-  background: rgba(8, 8, 8, 0.55);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s ease;
 }
-.bpx-player-container:not([data-ctrl-hidden="true"]):hover .ytds-toggle-bili,
-.ytds-toggle-bili:focus-visible { opacity: 0.95; }
-.bpx-player-container .ytds-toggle-bili:hover { background: rgba(20, 20, 20, 0.85); }
+.bpx-player-container .ytds-toggle-bili:hover { background: rgba(255, 255, 255, 0.12); }
+.ytds-toggle-bili:focus-visible { outline: 2px solid #3ea6ff; outline-offset: -2px; }
 
 /* The status line explains WHY no subtitle is showing (no track / needs login
    / read failed / loading). It is deliberately plain: it is an explanation,
@@ -299,3 +289,11 @@ html.ytds-active.ytds-rendering .bpx-player-subtitle-wrap {
 }
 #ytds-overlay .ytds-status.ytds-status-on { display: inline-block; }
 #ytds-overlay.ytds-empty .ytds-status { display: none; }
+/* Recognition review labels stay separate from the spoken source text. */
+#ytds-overlay[data-ytds-review]:not([data-ytds-review=""])::before {
+  content: attr(data-ytds-review);
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #ffdf92;
+}

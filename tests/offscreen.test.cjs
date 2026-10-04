@@ -18,7 +18,7 @@ const vm = require("node:vm");
 const ROOT = path.resolve(__dirname, "..");
 const loadSource = (name) => fs.readFileSync(path.join(ROOT, name), "utf8");
 
-const MODULES = ["bridge-client.js", "media-clock.js", "recognizer-stream.js", "offscreen.js"];
+const MODULES = ["bridge-client.js", "media-clock.js", "recognizer-stream.js", "capture-health.js", "offscreen.js"];
 
 function audioNode(label, edges) {
   const node = {
@@ -63,9 +63,13 @@ function fakeAudio(edges) {
 
 function fakeTracks() {
   const stopped = [];
-  const track = { kind: "audio", stop: () => stopped.push("audio") };
+  const handlers = new Map();
+  const track = { kind: "audio", stop: () => stopped.push("audio"),
+    addEventListener: (type, handler) => handlers.set(type, handler),
+    removeEventListener: (type, handler) => { if (handlers.get(type) === handler) handlers.delete(type); } };
   return {
     stopped,
+    end: () => handlers.get("ended")?.(),
     stream: { getTracks: () => [track] },
   };
 }
@@ -183,6 +187,9 @@ const START_MESSAGE = {
     bridgeBase: "http://127.0.0.1:8766",
     bridgeToken: "token",
     hasAudioTrack: true,
+    currentTimeMs: 24000,
+    playbackRate: 1,
+    paused: true,
   },
 };
 
@@ -259,7 +266,7 @@ test("media reports move the clock, and a seek opens a new epoch", async () => {
   await dispatch(harness, START_MESSAGE);
   const first = await dispatch(harness, {
     type: "mediaReport", target: "offscreen",
-    mediaMs: 12000, wallMs: 100000, rate: 1, paused: false,
+    mediaMs: 24000, wallMs: Date.now(), rate: 1, paused: false,
   });
   assert.equal(first.ok, true);
   assert.equal(first.epoch, 0);
@@ -315,18 +322,83 @@ test("PCM chunks from the worklet are converted to 16-bit and pushed", async () 
   assert.ok(Number.isFinite(pushed.options.atMs), "audio is stamped with the moment it arrived");
 });
 
-test("audio that arrives before the page reports a time is held, not guessed", async () => {
+test("capture without a page position cannot send guessed audio", async () => {
   const harness = load();
   // Start with the clock never told where the video is: capture must still
   // work, but no packet may carry an invented media time.
-  await dispatch(harness, {
+  const answer = await dispatch(harness, {
     type: "recogOffscreenStart",
     streamId: "stream-id-2",
-    context: Object.assign({}, START_MESSAGE.context),
+    context: Object.assign({}, START_MESSAGE.context, { currentTimeMs: undefined }),
   });
-  const session = harness.sandbox.__ytdsOffscreen.session;
-  const result = session.pushPcm(new Uint8Array(3200), { atMs: 1000 });
-  assert.equal(result.mediaMs, null);
-  assert.equal(result.waiting, true);
-  assert.equal(session.queued.length, 0, "nothing may be sent without a media time");
+  assert.equal(answer.ok, false);
+  assert.equal(answer.reason, 'media_not_ready');
+  assert.equal(harness.sandbox.__ytdsOffscreen.session, undefined);
+});
+
+test('capture start seeds media position before first periodic report', async () => {
+  const harness = load();
+  const answer = await dispatch(harness, START_MESSAGE);
+  assert.equal(answer.ok, true);
+  assert.equal(harness.sandbox.__ytdsOffscreen.clock.snapshotMs, 24000);
+  assert.equal(harness.sandbox.__ytdsOffscreen.session.audioStartMs, 24000);
+});
+
+test('missing page position refuses capture instead of inventing zero', async () => {
+  const harness = load();
+  const answer = await dispatch(harness, { ...START_MESSAGE,
+    context: { ...START_MESSAGE.context, currentTimeMs: undefined } });
+  assert.equal(answer.ok, false);
+  assert.equal(answer.reason, 'media_not_ready');
+  assert.equal(harness.tracks.stopped.length, 1);
+});
+
+test('the popup status carries actual input health and clears the silence notice on sound', async () => {
+  let now = 100000;
+  const harness = load({ Date: { now: () => now } });
+  await dispatch(harness, { ...START_MESSAGE, context: { ...START_MESSAGE.context, paused: false } });
+  const node = harness.sandbox.__ytdsOffscreen.node;
+  for (let elapsed = 0; elapsed <= 8000; elapsed += 1000) {
+    now = 100000 + elapsed;
+    await dispatch(harness, { type: 'mediaReport', target: 'offscreen',
+      mediaMs: 24000 + elapsed, wallMs: now, rate: 1, paused: false });
+    node.port.onmessage({ data: { type: 'pcm', samples: new Float32Array(4800), frames: 4800 } });
+  }
+  assert.equal((await dispatch(harness, { type: 'recogOffscreenStatus' })).status.audioInput.state, 'silent');
+  now += 100;
+  node.port.onmessage({ data: { type: 'pcm', samples: new Float32Array([0.05, -0.05]), frames: 2 } });
+  assert.equal(harness.chrome.last('recogState').audioInput.state, 'signal');
+  await dispatch(harness, { type: 'recogOffscreenStop' });
+});
+
+test('an ended capture releases resources and late session updates cannot restore running state', async () => {
+  const harness = load();
+  await dispatch(harness, START_MESSAGE);
+  const oldSession = harness.sandbox.__ytdsOffscreen.session;
+  const oldNode = harness.sandbox.__ytdsOffscreen.node;
+  let packets = 0;
+  oldSession.pushPcm = () => packets++;
+  harness.tracks.end();
+  assert.equal(harness.chrome.last('recogState').state, 'failed');
+  assert.equal(harness.chrome.last('recogState').message, 'capture_ended');
+  assert.equal(harness.tracks.stopped.length, 1);
+  oldSession.emitState('running');
+  oldNode.port.onmessage({ data: { type: 'pcm', samples: new Float32Array([0.5]) } });
+  assert.equal(packets, 0);
+  assert.equal(harness.chrome.last('recogState').message, 'capture_ended');
+  await oldSession.writeChain;
+  assert.equal(harness.chrome.last('recogState').state, 'failed');
+});
+
+test('a worklet callback from an old capture cannot feed a newly started session', async () => {
+  const harness = load();
+  await dispatch(harness, START_MESSAGE);
+  const previousNode = harness.sandbox.__ytdsOffscreen.node;
+  await dispatch(harness, { type: 'recogOffscreenStop' });
+  await dispatch(harness, START_MESSAGE);
+  let pushed = 0;
+  harness.sandbox.__ytdsOffscreen.session.pushPcm = () => pushed++;
+  previousNode.port.onmessage({ data: { type: 'pcm', samples: new Float32Array([0.5]) } });
+  assert.equal(pushed, 0);
+  await dispatch(harness, { type: 'recogOffscreenStop' });
 });

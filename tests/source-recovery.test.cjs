@@ -9,16 +9,16 @@ const response = text => ({ ok: true, text: async () => JSON.stringify({
   events: [{ tStartMs: 0, dDurationMs: 2000, segs: [{ utf8: text }] }]
 }) });
 
-function mount({ seed = false } = {}) {
+function mount({ seed = false, tracks = true, playerResponse } = {}) {
   const requests = [], timers = [], posted = [], listeners = {};
   let trackReady = seed;
   let now = 1700000000000;
   class Clock extends Date { static now() { return now; } }
   const player = { getOption(_area, name) {
     if (name === 'track') return trackReady ? { languageCode: 'de', vssId: '.de' } : null;
-    if (name === 'tracklist') return [{ languageCode: 'de', vssId: '.de',
-      baseUrl: 'https://www.youtube.com/api/timedtext?v=sample&lang=de&pot=seed' }];
-  } };
+    if (name === 'tracklist') return tracks ? [{ languageCode: 'de', vssId: '.de',
+      baseUrl: 'https://www.youtube.com/api/timedtext?v=sample&lang=de&pot=seed' }] : [];
+  }, getPlayerResponse() { return playerResponse; } };
   class XMLHttpRequest {
     open(_method, url) { this.url = url; }
     send() {}
@@ -154,6 +154,20 @@ test('a hung original body reaches its deadline and a fresh token can recover th
   assert.equal(p.posted.at(-1).cues[0].text, 'Erholt.');
 });
 
+test('an empty json3 duplicate retries the exact native signed URL once', async () => {
+  const p = mount();
+  p.capture('native-proof');
+  const duplicate = p.requests.find(r => !new URL(r.url).searchParams.has('tlang') && new URL(r.url).searchParams.get('fmt') === 'json3');
+  duplicate.resolve({ ok: true, text: async () => '' });
+  await settle();
+  const native = p.requests.filter(r => !new URL(r.url).searchParams.has('tlang')).at(-1);
+  assert.equal(new URL(native.url).searchParams.get('pot'), 'native-proof');
+  assert.equal(new URL(native.url).searchParams.has('fmt'), false);
+  native.resolve(response('Native format recovered.'));
+  await settle();
+  assert.equal(p.posted.find(message => message.type === 'cues').cues[0].text, 'Native format recovered.');
+});
+
 test('a hung whole-track translation times out without losing the original', async () => {
   const p = mount();
   p.capture();
@@ -269,4 +283,19 @@ test('a selected track that appears after 1.4 seconds is still discovered automa
   p.enableTrack();
   p.timers.filter(t => t.ms === 200 && !t.cleared).at(-1).fn();
   assert.equal(p.requests.length, 2);
+});
+
+test('YouTube missing tracks require a matching playable player response', () => {
+  for (const [playerResponse, expected] of [
+    [undefined, false],
+    [{ videoDetails: { videoId: 'other' }, playabilityStatus: { status: 'OK' } }, false],
+    [{ videoDetails: { videoId: 'sample' }, playabilityStatus: { status: 'LOGIN_REQUIRED' } }, false],
+    [{ videoDetails: { videoId: 'sample' }, playabilityStatus: { status: 'OK' }, captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ languageCode: 'de' }] } } }, false],
+    [{ videoDetails: { videoId: 'sample' }, playabilityStatus: { status: 'OK' } }, true],
+  ]) {
+    const page = mount({ tracks: false, playerResponse });
+    page.timers.find(t => t.ms === 6000 && !t.cleared).fn();
+    const message = page.posted.find(m => m.type === 'nocues');
+    assert.equal(message.reason === 'no_track', expected);
+  }
 });

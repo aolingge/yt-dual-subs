@@ -6,7 +6,7 @@ The optional audio workflow in source **3.11.0** fills missing word timestamps u
 
 1. 更新后，在 `edge://extensions` / `chrome://extensions` 重新加载扩展，再刷新 YouTube 视频页。
 2. 准备 **Python 3.10+、FFmpeg 和 Node.js**。FFmpeg 需在 PATH 中，或将环境变量 `YTDS_FFMPEG` 指向实际的 FFmpeg 可执行文件；Windows 下也识别 `%LOCALAPPDATA%\Programs\ffmpeg\ffmpeg.exe`。Node.js 用于公开 YouTube 音频的播放器脚本处理；选择本地文件不需要 Node.js。
-3. 在扩展目录中双击 `tools/Start-AudioAlignment.cmd`。首次会在 `tools/audio-alignment/.venv` 准备 Python 依赖，新包安装在这个目录，已有 Torch 可以复用。程序只监听 `127.0.0.1:8765`，不会安装开机启动项，也不会自行常驻后台。
+3. 在扩展目录中双击 `tools/Start-AudioAlignment.cmd`。首次会在 `tools/audio-alignment/.venv` 准备 Python 依赖，新包安装在这个目录，已有 Torch 可以复用。程序只监听 `127.0.0.1:8767`，不会安装开机启动项，也不会自行常驻后台。
 4. 打开带有原文字幕的 YouTube 视频，在插件弹窗的**词时间来源**中选择 **音频对齐**，再点击 **音频对齐跟读**，进入独立操作页。
 5. 点击 **获取视频音频并对齐**。第一次连接会由浏览器询问本机站点访问权限；仅此功能需要该可选权限。
 6. 首次分析会从 Hugging Face 下载所选语言的模型，约 360 MB。已有字幕词时间保持优先；缺少词时间的句子按当前观看位置、后续句子、前面句子的顺序分析。每批结果生成后会即时更新视频中的跟读，并缓存在本机。
@@ -31,7 +31,7 @@ The optional audio workflow in source **3.11.0** fills missing word timestamps u
 
 程序、模型、音频及词时间默认保存在 `%LOCALAPPDATA%\YT Dual Subs\audio-alignment`。扩展中的结果缓存最多四个视频/语言记录，合并大小有上限。上述个人数据不进入仓库。需要节省磁盘时，可在停止程序后自行清理这个明确的缓存目录；清理后需重新分析。
 
-**连不上本机程序时：** 先运行 `.\tools\Stop-AudioAlignment.ps1`（它会停止所有残留的本机程序进程），再重新启动 `Start-AudioAlignment.ps1`。程序在 `127.0.0.1:8765` 独占监听，第二个实例会直接退出并提示，不会像以前那样把请求分给两个进程；启动时会打印缓存目录以及是否可写，`/health` 也会返回同一路径。
+**连不上本机程序时：** 先运行 `.\tools\Stop-AudioAlignment.ps1`（它会停止所有残留的本机程序进程），再重新启动 `Start-AudioAlignment.ps1`。程序在 `127.0.0.1:8767` 独占监听，第二个实例会直接退出并提示，不会像以前那样把请求分给两个进程；启动时会打印缓存目录以及是否可写，`/health` 也会返回同一路径。
 
 ## English
 
@@ -41,7 +41,7 @@ A local file must belong to the same video and must not be speed-changed. If it 
 
 German and English models run on the CPU. First use downloads about 360 MB per language; inference speed depends on the computer. Captions remain readable while analysis runs, and partial results update the existing renderer. Native and matched automatic-caption word times keep priority. Unreliable alignments retain the existing mode. This does not create transcripts for videos without captions or promise error-free word boundaries.
 
-**Troubleshooting.** If the analysis page reports that it cannot reach the local helper, run `tools/Stop-AudioAlignment.ps1` (it stops every leftover helper process) and start `Start-AudioAlignment.ps1` again. The helper binds `127.0.0.1:8765` exclusively, so a second copy exits with a message instead of splitting requests between two processes; the launcher prints the cache directory and whether it is writable, and `GET /health` reports the same path. Restart the helper after updating the extension: results carry the version of the helper that produced them, and an older helper cannot produce the sentence-locked format this build applies, so the analysis page refuses to start and says the helper is too old instead of running the model and discarding the result. The popup's status line distinguishes running, failed, and stale results; a result is stale when the current video, caption text, language, model or audio start time no longer matches it, and it is never applied.
+**Troubleshooting.** If the analysis page reports that it cannot reach the local helper, run `tools/Stop-AudioAlignment.ps1` (it stops every leftover helper process) and start `Start-AudioAlignment.ps1` again. The helper binds `127.0.0.1:8767` exclusively, so a second copy exits with a message instead of splitting requests between two processes; the launcher prints the cache directory and whether it is writable, and `GET /health` reports the same path. Restart the helper after updating the extension: results carry the version of the helper that produced them, and an older helper cannot produce the sentence-locked format this build applies, so the analysis page refuses to start and says the helper is too old instead of running the model and discarding the result. The popup's status line distinguishes running, failed, and stale results; a result is stale when the current video, caption text, language, model or audio start time no longer matches it, and it is never applied.
 
 ## Implementation and verification
 
@@ -73,3 +73,9 @@ Verified on this machine with the real helper process and the real German model 
 **Not verified.** Absolute per-word error against human-checked word boundaries was not measured — these recordings have one human-written transcript per clip, not word-level ground truth, so the numbers above show internal consistency, coverage and bias, not accuracy. Only one speaker was covered (no multi-speaker case), and the audio itself could not be fetched from YouTube in this environment: the local proxy truncated every media stream (`Unable to connect to proxy` / `Stream ends prematurely`), and YouTube later answered `Sign in to confirm you're not a bot` for the anonymous download path, so the live download route was exercised only up to its failure handling. Do not read this section as a claim that word timing is accurate on arbitrary videos.
 
 Models: [German base CV9 (MIT)](https://huggingface.co/oliverguhr/wav2vec2-base-german-cv9), fixed revision `e3c2cb317c771e7fbbdfbf20be6017b8e65b232d`; [English Wav2Vec2 base 960h (Apache 2.0)](https://huggingface.co/facebook/wav2vec2-base-960h). The German model is loaded through explicit extractor/tokenizer/CTC classes, avoiding its optional language-model decoder. CTC algorithm reference: [PyTorch forced alignment tutorial](https://docs.pytorch.org/audio/main/tutorials/forced_alignment_tutorial.html). Download tool: [yt-dlp](https://github.com/yt-dlp/yt-dlp). The verification corpus is [Thorsten-Voice TV-24kHz-Neutral](https://huggingface.co/datasets/Thorsten-Voice/TV-24kHz-Neutral) (public-domain German speech). These are third-party dependencies, not developer-operated services.
+
+## 3.12.1 端口迁移 / Port migration
+
+默认端口从 8765 改为 **8767**，避开 AnkiConnect 的默认 8765；语音识别桥仍为 8766。更新后重新启动本机音频对齐辅助程序。启动器和扩展会核对 `service: yt-dual-subs-alignment` 及协议版本，避免误连其他服务。
+
+The alignment default moves from 8765 to **8767**, leaving AnkiConnect's default port free. ASR remains on 8766. Restart the alignment helper after updating. Both launcher and extension check the service identity and protocol version before using it.
