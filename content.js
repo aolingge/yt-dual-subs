@@ -224,6 +224,7 @@
   let cueAligned = null;     // boolean | null
   let cueVideoId = "";       // videoId the cues belong to
   let cueSourceLang = "auto"; // original track language for short-sentence translation
+  let cueContentRevision = 0;  // increments whenever visible cue text/translation changes
   let translationPending = false; // original cues arrived; tlang is still loading
   let pendingSince = 0;          // when the current tlang wait began (0 = not waiting)
   let fastPreviewIdx = -1;      // current sentence shown via gtx while tlang loads
@@ -324,6 +325,9 @@
   let recognizedNoticeTimer = null;
   // Corrections are local to this page session and survive model revisions.
   const recognizedCorrections = new Map();
+  const recognizedRetryStates = new Map(); // correction key -> { state, revision }
+  const recognizedRetryTimers = new Map();
+  const RECOGNITION_RETRY_TIMEOUT_MS = 15000;
   const correctionKey = cue => currentVideoId + "|" + cue.epoch + "|" + cue.id;
   // Capturing the tab for recognition needs to know where the video is, and
   // this page is the only place that knows. The reporter runs only while a
@@ -2513,6 +2517,7 @@
     cueList.sort((a, b) => a.start - b.start);
     computeCueEnds(cueList);
     displayCueList = buildDisplayCues(cueList);
+    cueContentRevision += 1;
     if (!updateTranslation) {
       transCache.clear();
       transInflight.clear();
@@ -2963,6 +2968,7 @@
       recogCueCount = 0; activeCueIdx = -1; cueDirty = true;
       transCache.clear(); transInflight.clear(); transRetryAt.clear();
       setOriginal(""); setTranslation("", "");
+      cueContentRevision += 1;
       return { ok: true, count: 0 };
     }
     const displayTarget = String(settings.targetLang || "zh-CN");
@@ -2973,6 +2979,16 @@
       // confusing the original recognition text with the final subtitle.
       bridgeText: cue.trans || ""
     }));
+    for (const cue of bridgeCues) {
+      const key = correctionKey(cue);
+      const retry = recognizedRetryStates.get(key);
+      if (retry && Number(cue.revision) > Number(retry.revision)) {
+        recognizedRetryStates.delete(key);
+        const timer = recognizedRetryTimers.get(key);
+        if (timer) clearTimeout(timer);
+        recognizedRetryTimers.delete(key);
+      }
+    }
     const data2 = {
       videoId: currentVideoId,
       nonce: configNonce,
@@ -3039,6 +3055,7 @@
           current.translationFailed = false;
           computeCueEnds(cueList);
           displayCueList = buildDisplayCues(cueList);
+          cueContentRevision += 1;
           cueDirty = true;
           cueTick();
         }
@@ -3265,6 +3282,7 @@
       recognitionState: recogState,
       recognitionMessage: recogMessage,
       recognitionCueCount: recogCueCount,
+      contentRevision: cueContentRevision,
       pending: !!translationPending,
       cached: !!usedVideoCache,
       cooldownSec: Math.max(0, Math.ceil((gtxCooldownUntil - Date.now()) / 1000))
@@ -3296,7 +3314,8 @@
       uncertain: !!cue.uncertain, corrected: !!cue.corrected,
       rawOriginal: cue.rawOriginal || cue.text,
       uncertaintyReasons: cue.uncertaintyReasons || [],
-      translationGroupIds: cue.translationGroupIds || []
+      translationGroupIds: cue.translationGroupIds || [],
+      recognitionState: recognizedRetryStates.get(correctionKey(cue))?.state || "ready"
     };
   }
 
@@ -3355,6 +3374,36 @@
       const key = correctionKey(cue);
       if (msg.type === "studyClearCorrection") {
         recognizedCorrections.delete(key);
+        recognizedRetryStates.set(key, { state: "pending", revision: Number(cue.revision) || 0 });
+        const previousTimer = recognizedRetryTimers.get(key);
+        if (previousTimer) clearTimeout(previousTimer);
+        const timer = setTimeout(() => {
+          recognizedRetryTimers.delete(key);
+          const current = recognizedRetryStates.get(key);
+          if (!current || current.state !== "pending") return;
+          recognizedRetryStates.set(key, { state: "failed", revision: current.revision });
+          cueContentRevision += 1;
+          for (const list of [cueList, displayCueList]) {
+            for (const item of list || []) {
+              if (item.id === cue.id && item.epoch === cue.epoch) item.recognitionState = "failed";
+            }
+          }
+          cueDirty = true;
+          cueTick();
+        }, RECOGNITION_RETRY_TIMEOUT_MS);
+        recognizedRetryTimers.set(key, timer);
+        cueContentRevision += 1;
+        for (const list of [cueList, displayCueList]) {
+          for (const item of list || []) {
+            if (item.id === cue.id && item.epoch === cue.epoch) {
+              item.corrected = false;
+              item.text = item.rawOriginal || item.text;
+              item.trans = "";
+              item.translationFailed = true;
+              item.recognitionState = "pending";
+            }
+          }
+        }
         sendResponse({ ok: true }); return;
       }
       const text = typeof msg.text === "string" ? msg.text.trim() : "";
@@ -3364,6 +3413,7 @@
       }
       const correction = { text, trans, uncertain: false, corrected: true };
       recognizedCorrections.set(key, correction);
+      recognizedRetryStates.delete(key);
       if (recognizedCorrections.size > 500) recognizedCorrections.delete(recognizedCorrections.keys().next().value);
       for (const list of [cueList, displayCueList]) {
         for (const item of list || []) {
@@ -3373,6 +3423,7 @@
         }
       }
       transCache.clear();
+      cueContentRevision += 1;
       forgetPace();
       activeCueIdx = -1; cueDirty = true; cueTick();
       sendResponse({ ok: true }); return;

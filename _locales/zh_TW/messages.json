@@ -366,6 +366,8 @@
   "recogEditFailed": {"message": "字幕已變化或文字無效，請重新載入。"},
   "recogRetry": {"message": "重新識別此段"},
   "recogRetryQueued": {"message": "已重新提交本機識別，稍後重新載入字幕列表。"},
+  "recogRetryPending": {"message": "重新識別中"},
+  "recogRetryFailed": {"message": "重新識別失敗"},
   "recogRetryExpired": {"message": "片段已過期或識別已停止；可先播放回聽，再重新啓動識別。"},
   "recogQueue": {"message": "排隊"},
   "recogDecodeP95": {"message": "識別耗時 P95"},

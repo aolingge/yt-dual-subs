@@ -154,7 +154,7 @@ test('the status snapshot describes what the page is doing', async () => {
     // These cues came from the page, which also means captions ARE present:
     // the local recognizer must refuse to start on this video.
     cueSource: 'page', captionAvailability: 'present',
-    recognitionState: '', recognitionMessage: '', recognitionCueCount: 0,
+    recognitionState: '', recognitionMessage: '', recognitionCueCount: 0, contentRevision: 1,
   });
 
   const off = await mountContent({ cues, aligned: true, settings: { enabled: false } });

@@ -366,6 +366,8 @@
   "recogEditFailed": {"message": "字幕已变化或文字无效，请重新载入。"},
   "recogRetry": {"message": "重新识别此段"},
   "recogRetryQueued": {"message": "已重新提交本机识别，稍后重新载入字幕列表。"},
+  "recogRetryPending": {"message": "重新识别中"},
+  "recogRetryFailed": {"message": "重新识别失败"},
   "recogRetryExpired": {"message": "片段已过期或识别已停止；可先播放回听，再重新启动识别。"},
   "recogQueue": {"message": "排队"},
   "recogDecodeP95": {"message": "识别耗时 P95"},

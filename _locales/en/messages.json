@@ -366,6 +366,8 @@
   "recogEditFailed": {"message": "Captions changed or text is invalid. Reload the list."},
   "recogRetry": {"message": "Recognize this segment again"},
   "recogRetryQueued": {"message": "Recognition was queued again. Reload the transcript shortly."},
+  "recogRetryPending": {"message": "Recognition in progress"},
+  "recogRetryFailed": {"message": "Recognition failed"},
   "recogRetryExpired": {"message": "The segment expired or recognition stopped. Replay it and restart recognition."},
   "recogQueue": {"message": "Queued"},
   "recogDecodeP95": {"message": "Recognition time P95"},

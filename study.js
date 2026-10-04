@@ -83,7 +83,7 @@
     const status = await activeMessage({ type: "status" });
     showSource(status);
     const nextId = status && status.videoId ? status.videoId : "";
-    const nextSignature = [nextId, status?.cueCount, status?.sourceLang, status?.targetLang, status?.cueSource, status?.manualTrack].join("|");
+    const nextSignature = [nextId, status?.contentRevision, status?.cueCount, status?.sourceLang, status?.targetLang, status?.cueSource, status?.manualTrack].join("|");
     if (nextSignature !== sourceSignature) {
       sourceSignature = nextSignature;
       sourceVideoId = nextId;
@@ -232,7 +232,13 @@
     const head = document.createElement("div");
     head.className = "study-item-head";
     head.textContent = timeLabel(entry.start) + "  ·  " + (entry.index + 1);
-    if (entry.corrected || entry.uncertain) {
+    if (entry.recognitionState === "pending") {
+      head.textContent += " · " + t("recogRetryPending", "重新识别中");
+      head.classList.add("study-review");
+    } else if (entry.recognitionState === "failed") {
+      head.textContent += " · " + t("recogRetryFailed", "重新识别失败");
+      head.classList.add("study-review");
+    } else if (entry.corrected || entry.uncertain) {
       head.textContent += " · " + (entry.corrected ? t("recogCorrected", "已校正") : t("recogReview", "识别待核对"));
       head.classList.add("study-review");
     }
@@ -248,7 +254,7 @@
       saveCue(entry, transcriptVideoId, transcriptTitle, transcriptLang)
         .catch(() => say(t("studyStoreFailed", "收藏失败，请检查浏览器存储后重试。"), "err"));
     }));
-    if (entry.recognized && entry.id) {
+    if (entry.recognized && entry.id && entry.recognitionState !== "pending") {
       actions.appendChild(button(t("recogEdit", "校正"), () => {
         if (row.querySelector(".study-edit")) return;
         const original = document.createElement("textarea");
@@ -279,6 +285,7 @@
         if (result?.ok) {
           await activeMessage({ type: "studyClearCorrection", videoId: transcriptVideoId,
             index: entry.index, expectedStart: entry.start, id: entry.id, epoch: entry.epoch });
+          await loadTranscript(true);
           say(t("recogRetryQueued", "已重新提交本机识别，稍后重新载入字幕列表。"), "ok");
         } else say(t("recogRetryExpired", "片段已过期或识别已停止；可先播放回听，再重新启动识别。"), "err");
       }));

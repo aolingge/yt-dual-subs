@@ -55,6 +55,33 @@ test('manual correction survives late recognition revisions and retains raw text
   assert.equal(page.request({ ...patch, epoch: 1 }).ok, false);
 });
 
+test('study status revision changes when recognized text changes', async () => {
+  const page = await mountContent({ skipCues: true });
+  page.sendInject({ type: 'nocues', reason: 'no_track' });
+  const videoId = page.status().videoId;
+  page.request({ type: 'recognizedCues', videoId, cues: [original], sourceLang: 'en' });
+  const firstRevision = page.status().contentRevision;
+  page.request({ type: 'recognizedCues', videoId,
+    cues: [{ ...original, text: 'Updated words', rawOriginal: 'Updated words', revision: 2 }], sourceLang: 'en' });
+  assert.ok(page.status().contentRevision > firstRevision);
+  assert.equal(page.request({ type: 'studyCues' }).entries[0].text, 'Updated words');
+});
+
+test('clearing a correction exposes a pending retry state and raw text', async () => {
+  const page = await mountContent({ skipCues: true });
+  page.sendInject({ type: 'nocues', reason: 'no_track' });
+  const videoId = page.status().videoId;
+  page.request({ type: 'recognizedCues', videoId, cues: [original], sourceLang: 'en' });
+  page.request({ type: 'studyCorrect', videoId, index: 0, expectedStart: 0, id: 'clip-0', epoch: 0,
+    text: 'Correct words.', trans: 'Richtige Wörter.' });
+  assert.equal(page.request({ type: 'studyClearCorrection', videoId, index: 0,
+    expectedStart: 0, id: 'clip-0', epoch: 0 }).ok, true);
+  const entry = page.request({ type: 'studyCues' }).entries[0];
+  assert.equal(entry.recognitionState, 'pending');
+  assert.equal(entry.text, original.rawOriginal);
+  assert.equal(entry.corrected, false);
+});
+
 test('native captions appearing after recognition block subsequent retries', async () => {
   const page = await mountContent({ skipCues: true });
   page.sendInject({ type: 'nocues', reason: 'no_track' });

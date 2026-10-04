@@ -132,7 +132,10 @@ test('seek clears queued old audio and subtitles immediately and rejects late ol
 test('slow polls and flushes are coalesced instead of accumulating timer work', async () => {
   const bridge = fakeBridge();
   let release;
-  bridge.transcript = () => new Promise((resolve) => { release = resolve; });
+  let released = false;
+  bridge.transcript = () => released
+    ? Promise.resolve({ revision: 0, segments: [], status: 'ready' })
+    : new Promise((resolve) => { release = (value) => { released = true; resolve(value); }; });
   const { session } = newSession(bridge, new loaded.MediaClock());
   session.observe({ mediaMs: 0, wallMs: 100000, rate: 1, paused: false });
   await session.start(); session.stopTimer();
@@ -144,10 +147,31 @@ test('slow polls and flushes are coalesced instead of accumulating timer work', 
     assert.equal(session.poll(0), poll);
     assert.equal(session.flush(), flush);
   }
-  assert.equal(bridge.calls.audio.length, 0);
+  await new Promise(setImmediate);
+  assert.equal(bridge.calls.audio.length, 1, 'a held transcript read must not block audio');
   release({ revision: 0, segments: [] });
   await flush;
   assert.equal(bridge.calls.audio.length, 1);
+});
+
+test('a late transcript answer after finish is ignored', async () => {
+  const bridge = fakeBridge();
+  let release;
+  let released = false;
+  bridge.transcript = () => released
+    ? Promise.resolve({ revision: 0, segments: [], status: 'ready' })
+    : new Promise((resolve) => { release = (value) => { released = true; resolve(value); }; });
+  const { session, updates } = newSession(bridge, new loaded.MediaClock());
+  session.observe({ mediaMs: 0, wallMs: 100000, rate: 1, paused: false });
+  await session.start(); session.stopTimer();
+  const polling = session.poll(0);
+  await new Promise(setImmediate);
+  const finishing = session.finish();
+  release({ revision: 99, segments: [segment({ revision: 99 })], status: 'ready' });
+  await polling;
+  await finishing;
+  assert.equal(session.revision, 0, 'a closed poll cannot advance the cursor');
+  assert.equal(updates.length, 0, 'a closed poll cannot repaint captions');
 });
 
 test('stopping drains all audio batches before finishing and closing exactly once', async () => {

@@ -79,6 +79,7 @@
       this.startedAt = this.now();
       this.lastFlushAt = 0;
       this.writeChain = Promise.resolve();
+      this.pollGeneration = 0;
       this.timer = null;
       this.restartPending = false;
       this.epoch = this.clock.epoch || 0;
@@ -242,10 +243,21 @@
       if (this.pollPending) return this.pollPending;
       if (!this.sessionId || this.finishing || this.stopped) return Promise.resolve(null);
       const wait = waitSeconds === undefined ? POLL_WAIT_SECONDS : waitSeconds;
-      const work = () => this.bridge.transcript(this.sessionId, this.revision, wait)
-        .then((response) => { this.consume(response); return response; })
+      const generation = this.pollGeneration;
+      const sessionId = this.sessionId;
+      const work = () => this.bridge.transcript(sessionId, this.revision, wait)
+        .then((response) => {
+          // A poll may outlive finish() or a stopped session. Its answer must
+          // not repaint a closed stream or advance the next stream's cursor.
+          if (generation !== this.pollGeneration || this.finishing || this.stopped ||
+              sessionId !== this.sessionId) return null;
+          this.consume(response);
+          return response;
+        })
         .catch(() => null);
-      this.pollPending = this.queue(work);
+      // Transcript reads are long-poll requests. They must not sit in the
+      // ordered audio write chain: a pending read can never delay sendAudio.
+      this.pollPending = work();
       this.pollPending.finally(() => { this.pollPending = null; }).catch(() => {});
       return this.pollPending;
     }
@@ -303,6 +315,7 @@
       if (this.finishPending) return this.finishPending;
       if (this.stopped) return { cues: this.cues, revision: this.revision, status: this.status };
       this.finishing = true;
+      this.pollGeneration += 1;
       this.stopTimer();
       const work = async () => {
         // Read after any opening handshake ahead of us has completed.
