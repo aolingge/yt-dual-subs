@@ -1,8 +1,12 @@
 <p align="center">
+  <img src="https://raw.githubusercontent.com/aolingge/aolingge/main/assets/language-cover.png" alt="语言学习主题装饰插画" width="100%" />
+</p>
+
+<p align="center">
   <img src="icons/icon128.png" alt="YT Dual Subs 图标" width="72" />
 </p>
 
-<h1 align="center">YT Dual Subs · YouTube 双语字幕</h1>
+<h1 align="center">YT Dual Subs · YouTube / Bilibili 双语字幕</h1>
 
 <p align="center"><strong>把喜欢的视频，变成语言练习。</strong><br />
 原文与译文同时看，陌生单词悬停查，难句反复听，实用表达收藏起来。</p>
@@ -24,6 +28,15 @@
 ![德语原文与中文译文同时显示，字幕位于播放器控制栏上方](docs/images/bilingual-subtitles.png)
 
 *图示为 3.8.1 版本截取的界面，用于展示功能，不代表当前源码版本。视频需要有可用的 YouTube 字幕，译文是否可得取决于翻译服务。*
+
+## 项目速览
+
+| 项目 | 说明 |
+| --- | --- |
+| **适合谁** | 在 Chrome 或 Edge 桌面版上用 YouTube、Bilibili 学语言的人。 |
+| **学习过程** | 看原文与译文、查陌生单词、重听句子，再收藏或导出有用表达。 |
+| **主要功能** | 单词高亮、悬停查词、句子重播、表达收藏，以及可调节的字幕位置和外观。 |
+| **入口** | [安装教程](#安装) · [English Bilibili 说明](README.md#bilibili-chinese-videos-with-german-subtitles) |
 
 ## 看视频时，它能帮你做什么
 

@@ -1,4 +1,8 @@
 <p align="center">
+  <img src="https://raw.githubusercontent.com/aolingge/aolingge/main/assets/language-cover.png" alt="Original decorative artwork for this project" width="100%" />
+</p>
+
+<p align="center">
   <img src="icons/icon128.png" alt="YT Dual Subs icon" width="72" />
 </p>
 
@@ -24,6 +28,15 @@ Original captions, translations, word lookup, and sentence practice — right on
 ![Original German captions and Chinese translation displayed together, above the player controls](docs/images/bilingual-subtitles.png)
 
 *Example UI captured from v3.8.1, retained to illustrate the interface rather than the current source version. A video needs available YouTube captions; translation availability depends on the provider.*
+
+## Project guide
+
+| Area | Details |
+| --- | --- |
+| **For** | Language learners watching YouTube or Bilibili in desktop Chrome or Edge. |
+| **Study loop** | Read the original and translation, look up a word, replay a sentence, then save or export useful material. |
+| **Controls** | Word highlighting, hover lookup, sentence repeat, saved phrases and configurable subtitle layout. |
+| **Start** | [Install](#install) · [Bilibili guide](#bilibili-chinese-videos-with-german-subtitles) · [Privacy and data](#privacy-and-your-data) |
 
 ## Make every caption useful
 
