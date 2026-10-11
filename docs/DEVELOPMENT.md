@@ -129,6 +129,16 @@ With a Node.js installation that supports its built-in test runner:
 node --test tests/*.test.cjs
 ```
 
+The `Extension checks` GitHub Actions workflow runs the structure/localization
+check (`node tools/check-extension.mjs`) and this unit suite on Ubuntu with Node
+20 and 24 for pull requests and pushes to `main`. These checks need no npm install.
+They use simulated browser APIs; real-browser/video/audio checks and the optional
+Python helper suite below remain separate.
+
+`Extension checks` 工作流会在 PR 和 `main` 推送时，使用 Ubuntu 上的 Node 20、24
+运行结构与本地化检查以及上述单元测试，无需安装 npm 依赖。这些测试使用模拟浏览器 API；
+真实浏览器、视频、音频检查及下方的可选 Python 程序测试仍需单独运行。
+
 For a focused check:
 
 ```sh
